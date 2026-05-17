@@ -1,0 +1,68 @@
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: agent-gateway
+  namespace: agent
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "*"
+
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: agent-vs
+  namespace: agent
+spec:
+  hosts:
+    - "*"
+  gateways:
+    - agent-gateway
+  http:
+    - name: sse-events
+      match:
+        - uri:
+            prefix: /api/events
+      timeout: 3600s
+      route:
+        - destination:
+            host: gateway-backend-service.agent.svc.cluster.local
+            port:
+              number: 5210
+
+    - name: api
+      match:
+        - uri:
+            prefix: /api/
+      route:
+        - destination:
+            host: gateway-backend-service.agent.svc.cluster.local
+            port:
+              number: 5210
+
+    - name: assets
+      match:
+        - uri:
+            prefix: /assets/
+      route:
+        - destination:
+            host: asset-service.agent.svc.cluster.local
+            port:
+              number: 5102
+
+    - name: frontend
+      match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: frontend-service.agent.svc.cluster.local
+            port:
+              number: 80

@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-task-scheduler-service
+  namespace: agent
+  labels:
+    app: mock-task-scheduler-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-task-scheduler-service
+  template:
+    metadata:
+      labels:
+        app: mock-task-scheduler-service
+    spec:
+      containers:
+        - name: mock-task-scheduler-service
+          image: agent/mock-task-scheduler-service:local
+          imagePullPolicy: Never
+          ports:
+            - name: grpc
+              containerPort: 5100
+          env:
+            - name: PORT
+              value: "5100"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: task-scheduler-service
+  namespace: agent
+  labels:
+    app: mock-task-scheduler-service
+spec:
+  type: ClusterIP
+  selector:
+    app: mock-task-scheduler-service
+  ports:
+    - name: grpc
+      port: 5100
+      targetPort: 5100
