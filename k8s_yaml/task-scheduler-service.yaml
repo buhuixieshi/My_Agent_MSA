@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: task-scheduler-service
+  namespace: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: task-scheduler-service
+  template:
+    metadata:
+      labels:
+        app: task-scheduler-service
+    spec:
+      containers:
+      - name: task-scheduler-service
+        image: task-scheduler-service:v1
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5100
+        env:
+        - name: SCHEDULER_GRPC_PORT
+          value: "5100"
+        - name: ORCHESTRATOR_TARGET
+          value: "agent-orchestrator-service:50052"
+        - name: MAX_TASK_TIME
+          value: "300"
+        - name: GRPC_DEADLINE_SECONDS
+          value: "310"
+        - name: BATCH_SIZE
+          value: "2"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: task-scheduler-service
+  namespace: agent
+spec:
+  selector:
+    app: task-scheduler-service
+  ports:
+  - name: grpc
+    port: 5100
+    targetPort: 5100
+  type: ClusterIP
