@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-backend-service
+  namespace: agent
+  labels:
+    app: gateway-backend-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway-backend-service
+  template:
+    metadata:
+      labels:
+        app: gateway-backend-service
+    spec:
+      containers:
+        - name: gateway-backend-service
+          image: agent/gateway-backend-service:local
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 5210
+          env:
+            # mock: 不依赖 scheduler，本地先跑通前端
+            # grpc: 连接 task-scheduler-service:5100
+            - name: SCHEDULER_CLIENT_MODE
+              value: "mock"
+            - name: SCHEDULER_GRPC_TARGET
+              value: "task-scheduler-service.agent.svc.cluster.local:5100"
+            - name: SUBSCRIBER_ID
+              value: "web-gateway-1"
+            # 空值表示暂不启用白名单。例：dujiawei,test-user
+            - name: USER_WHITELIST
+              value: ""
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-backend-service
+  namespace: agent
+  labels:
+    app: gateway-backend-service
+spec:
+  type: ClusterIP
+  selector:
+    app: gateway-backend-service
+  ports:
+    - name: http
+      port: 5210
+      targetPort: 5210

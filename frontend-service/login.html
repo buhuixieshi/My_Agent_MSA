@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>用户登录</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .login-card {
+      width: min(420px, calc(100vw - 32px));
+      background: #ffffff;
+      border-radius: 12px;
+      padding: 28px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+    }
+
+    h1 {
+      margin: 0 0 20px;
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #333333;
+      font-size: 14px;
+    }
+
+    input {
+      width: 100%;
+      height: 42px;
+      padding: 0 12px;
+      border: 1px solid #d0d0d0;
+      border-radius: 8px;
+      font-size: 15px;
+      outline: none;
+    }
+
+    input:focus {
+      border-color: #666666;
+    }
+
+    button {
+      width: 100%;
+      height: 42px;
+      margin-top: 16px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 15px;
+      background: #222222;
+      color: #ffffff;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .tip {
+      margin-top: 12px;
+      font-size: 13px;
+      color: #666666;
+      line-height: 1.5;
+    }
+
+    .error {
+      margin-top: 12px;
+      color: #c62828;
+      font-size: 13px;
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <main class="login-card">
+    <h1>用户登录</h1>
+
+    <label for="user_id">用户ID</label>
+    <input id="user_id" type="text" placeholder="请输入用户ID" autocomplete="username" />
+
+    <button id="login_btn" onclick="login()">登录</button>
+
+    <div class="tip">
+      登录后会把用户ID保存在浏览器本地，用于后续创建会话和接收任务事件。
+    </div>
+
+    <div id="error" class="error"></div>
+  </main>
+
+  <script>
+    const userInput = document.getElementById("user_id");
+    const loginBtn = document.getElementById("login_btn");
+    const errorBox = document.getElementById("error");
+
+    const existingUserId = localStorage.getItem("user_id");
+    if (existingUserId) {
+      userInput.value = existingUserId;
+    }
+
+    function showError(message) {
+      errorBox.textContent = message;
+      errorBox.style.display = "block";
+    }
+
+    function clearError() {
+      errorBox.textContent = "";
+      errorBox.style.display = "none";
+    }
+
+    function buildSessionId(userId) {
+      return `web_${userId}`;
+    }
+
+    async function login() {
+      clearError();
+
+      const userId = userInput.value.trim();
+      if (!userId) {
+        showError("请输入用户ID");
+        return;
+      }
+
+      loginBtn.disabled = true;
+
+      try {
+        const response = await fetch("/api/login", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            user_id: userId,
+            session_id: buildSessionId(userId)
+          })
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || `登录失败：HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.ok === false) {
+          throw new Error(data.error || "登录失败");
+        }
+
+        localStorage.setItem("user_id", userId);
+        localStorage.setItem("session_id", data.session_id || buildSessionId(userId));
+
+        window.location.href = "/chat.html";
+      } catch (err) {
+        showError(err.message || "登录失败，请检查 gateway-backend-service");
+      } finally {
+        loginBtn.disabled = false;
+      }
+    }
+
+    userInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        login();
+      }
+    });
+  </script>
+</body>
+</html>
