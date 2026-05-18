@@ -1,12 +1,6 @@
 syntax = "proto3";
 
-package scheduler.v1;
-
-service TaskSchedulerService {
-  rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);
-  rpc SubscribeEvents(SubscribeEventsRequest) returns (stream TaskEvent);
-  rpc GetTaskStatus(GetTaskStatusRequest) returns (GetTaskStatusResponse);
-}
+package task_scheduler.v1;
 
 message DeliveryTarget {
   string channel = 1;
@@ -53,14 +47,7 @@ message TaskEvent {
   map<string, string> metadata = 12;
 }
 
-message GetTaskStatusRequest {
-  string task_id = 1;
-}
-
-message GetTaskStatusResponse {
-  bool ok = 1;
-  string task_id = 2;
-  string status = 3;
-  int32 waiting = 4;
-  string error = 5;
+service TaskScheduler {
+  rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);
+  rpc SubscribeEvents(SubscribeEventsRequest) returns (stream TaskEvent);
 }

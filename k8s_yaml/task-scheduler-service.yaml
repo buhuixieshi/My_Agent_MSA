@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: task-scheduler-service
-        image: agent/task-scheduler-service:local
+        image: agent/task-scheduler-service:v2
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5100
@@ -23,7 +23,7 @@ spec:
         - name: SCHEDULER_GRPC_PORT
           value: "5100"
         - name: ORCHESTRATOR_TARGET
-          value: "agent-orchestrator-service:50052"
+          value: "agent-orchestrator-service:5300"
         - name: MAX_TASK_TIME
           value: "300"
         - name: GRPC_DEADLINE_SECONDS

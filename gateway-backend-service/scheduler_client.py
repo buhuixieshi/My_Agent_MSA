@@ -1,5 +1,6 @@
 import asyncio
 import os
+import uuid
 from typing import AsyncIterator, List
 
 from schemas import CreateTaskResult, DeliveryTarget, FrontendMessage, TaskEvent
@@ -17,17 +18,6 @@ class SchedulerClient:
         raise NotImplementedError
 
 
-<<<<<<< HEAD
-class GrpcSchedulerClient(SchedulerClient):
-    """
-    真实环境用：直接对接 task-scheduler-service。
-
-    Dockerfile 会在镜像构建时从 ./proto/scheduler.proto 生成：
-    - /app/proto_gen/scheduler_pb2.py
-    - /app/proto_gen/scheduler_pb2_grpc.py
-    """
-
-=======
 class MockSchedulerClient(SchedulerClient):
     def __init__(self) -> None:
         self._event_queue: asyncio.Queue = asyncio.Queue()
@@ -113,7 +103,6 @@ class MockSchedulerClient(SchedulerClient):
 
 
 class GrpcSchedulerClient(SchedulerClient):
->>>>>>> e8aa957e2d858ae206deae64936a227615426651
     def __init__(self, target: str) -> None:
         self.target = target
 
@@ -136,33 +125,41 @@ class GrpcSchedulerClient(SchedulerClient):
         scheduler_pb2, scheduler_pb2_grpc = self._import_proto_modules()
         session_id = self._session_id(message)
 
-        async with grpc.aio.insecure_channel(self.target) as channel:
-            stub = scheduler_pb2_grpc.TaskSchedulerServiceStub(channel)
+        try:
+            async with grpc.aio.insecure_channel(self.target) as channel:
+                stub = scheduler_pb2_grpc.TaskSchedulerStub(channel)
 
-            req = scheduler_pb2.CreateTaskRequest(
-                user_id=message.user_id,
-                session_id=session_id,
-                channel="web",
-                content=message.content,
-                client_message_id=message.client_message_id or "",
-                delivery_target=scheduler_pb2.DeliveryTarget(
-                    channel="web",
+                req = scheduler_pb2.CreateTaskRequest(
                     user_id=message.user_id,
-                    conversation_id=session_id,
-                    reply_to=message.client_message_id or "",
-                ),
-                metadata=message.metadata,
-            )
+                    session_id=session_id,
+                    channel="web",
+                    content=message.content,
+                    client_message_id=message.client_message_id or "",
+                    delivery_target=scheduler_pb2.DeliveryTarget(
+                        channel="web",
+                        user_id=message.user_id,
+                        conversation_id=session_id,
+                        reply_to=message.client_message_id or "",
+                    ),
+                    metadata=message.metadata,
+                )
 
-            resp = await stub.CreateTask(req)
+                resp = await stub.CreateTask(req)
 
+        except Exception as exc:
             return CreateTaskResult(
-                ok=resp.ok,
-                task_id=resp.task_id,
-                status=resp.status,
-                waiting=resp.waiting,
-                error=resp.error,
+                ok=False,
+                status="error",
+                error=f"failed to call task-scheduler-service at {self.target}: {exc}",
             )
+
+        return CreateTaskResult(
+            ok=resp.ok,
+            task_id=resp.task_id,
+            status=resp.status,
+            waiting=resp.waiting,
+            error=resp.error,
+        )
 
     async def subscribe_events(
         self,
@@ -181,7 +178,7 @@ class GrpcSchedulerClient(SchedulerClient):
                 )
 
                 async with grpc.aio.insecure_channel(self.target) as channel:
-                    stub = scheduler_pb2_grpc.TaskSchedulerServiceStub(channel)
+                    stub = scheduler_pb2_grpc.TaskSchedulerStub(channel)
 
                     req = scheduler_pb2.SubscribeEventsRequest(
                         subscriber_id=subscriber_id,
@@ -220,19 +217,6 @@ class GrpcSchedulerClient(SchedulerClient):
 
 
 def build_scheduler_client() -> SchedulerClient:
-<<<<<<< HEAD
-    """
-    no-mock 版本：强制使用 gRPC task-scheduler-service。
-
-    同 namespace agent 内推荐：
-      SCHEDULER_GRPC_TARGET=task-scheduler-service:5100
-
-    跨 namespace 可用：
-      SCHEDULER_GRPC_TARGET=task-scheduler-service.agent.svc.cluster.local:5100
-    """
-
-    target = os.getenv("SCHEDULER_GRPC_TARGET", "task-scheduler-service:5100")
-=======
     mode = os.getenv("SCHEDULER_CLIENT_MODE", "grpc").lower()
 
     if mode == "mock":
@@ -242,5 +226,4 @@ def build_scheduler_client() -> SchedulerClient:
         "SCHEDULER_GRPC_TARGET",
         "task-scheduler-service.agent.svc.cluster.local:5100",
     )
->>>>>>> e8aa957e2d858ae206deae64936a227615426651
     return GrpcSchedulerClient(target=target)
