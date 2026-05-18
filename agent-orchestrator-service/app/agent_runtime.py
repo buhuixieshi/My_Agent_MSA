@@ -78,6 +78,39 @@ class AgentRuntime:
 
         return normalized in {"user", "用户"} or raw == str(task.user.id)
 
+    @staticmethod
+    def _extract_raw_model_text(model_response) -> str:
+        """
+        从 model-proxy 返回体里尽量提取模型原始文本。
+        """
+        try:
+            if model_response is None:
+                return ""
+
+            if isinstance(model_response, str):
+                return model_response
+
+            if not isinstance(model_response, dict):
+                return str(model_response)
+
+            if "text" in model_response:
+                return str(model_response.get("text") or "")
+
+            if "choices" in model_response:
+                choices = model_response.get("choices") or []
+                if choices:
+                    message = choices[0].get("message", {})
+                    return str(message.get("content") or "")
+
+            if "message" in model_response:
+                message = model_response.get("message")
+                if isinstance(message, dict):
+                    return str(message.get("content") or "")
+
+            return str(model_response)
+        except Exception:
+            return ""
+
     @classmethod
     def _emit_user_message(
         cls,
@@ -106,6 +139,27 @@ class AgentRuntime:
             task.status = "completed"
 
         return final_reply
+
+    @classmethod
+    def _emit_raw_model_fallback(
+        cls,
+        task,
+        emit: Callable[[TaskEventDTO], None],
+        raw_text: str,
+        exc: Exception | None = None,
+    ) -> str:
+        """
+        兜底：模型已经生成过内容，但后续解析/调度/弹栈出现异常时，
+        不再让任务直接失败，而是把模型原始输出直接发给用户。
+        """
+        fallback_text = (raw_text or "").strip()
+        if not fallback_text:
+            fallback_text = f"任务处理异常：{exc}" if exc else "任务处理异常，但没有可用的模型原始输出。"
+
+        if exc is not None:
+            debug_log(f"[fallback_raw_model_output] {exc}")
+
+        return cls._emit_user_message(task, emit, fallback_text, final=True)
 
     @classmethod
     def get_agent(cls, agent_id: str, session_id: str, user_id: str = "default") -> "AgentRuntime":
@@ -142,9 +196,13 @@ class AgentRuntime:
         emit(cls.build_event(task, "task_started"))
 
         if len(task.agent_context) == 1:
-            cls.first_call(task)
-            task.default_agent = task.target
-            task.default_agent.send(task, emit)
+            try:
+                cls.first_call(task)
+                task.default_agent = task.target
+                task.default_agent.send(task, emit)
+            except Exception as exc:
+                raw_output = task.consume_temp_dialog_output() or task.send_text or ""
+                return cls._emit_raw_model_fallback(task, emit, str(raw_output), exc)
 
         steps = 0
         while len(task.agent_context) > 0 and task.status == "running":
@@ -169,8 +227,13 @@ class AgentRuntime:
             target_id = getattr(task.target, "id", "unknown")
             result = [target_id, request, caller_id, output]
 
-            task.set_temp_dialog_input(result)
-            task.target.send(task, emit)
+            try:
+                task.set_temp_dialog_input(result)
+                task.target.send(task, emit)
+            except Exception as exc:
+                final_reply = cls._emit_raw_model_fallback(task, emit, str(output), exc)
+                break
+
             final_reply = str(output)
 
         if task.status == "running":
@@ -180,14 +243,17 @@ class AgentRuntime:
             final_reply = task.send_text
 
         if final_reply:
-            cls.context_client.append_turn(
-                user_id=task.user.id,
-                session_id=task.user.session_id,
-                task_id=task.task_id,
-                user_message=task.content,
-                assistant_message=final_reply,
-                tool_summaries=task.tool_log,
-            )
+            try:
+                cls.context_client.append_turn(
+                    user_id=task.user.id,
+                    session_id=task.user.session_id,
+                    task_id=task.task_id,
+                    user_message=task.content,
+                    assistant_message=final_reply,
+                    tool_summaries=task.tool_log,
+                )
+            except Exception as exc:
+                debug_log(f"append_turn failed: {exc}")
 
         emit(cls.build_event(task, "task_completed"))
         return final_reply
@@ -322,58 +388,66 @@ class AgentRuntime:
             self._emit_user_message(task, emit, error_text, final=True)
             return
 
-        parsed = parse_model_response(self.id, model_response)
-        task.set_temp_dialog_output(parsed.text)
+        raw_model_text = self._extract_raw_model_text(model_response)
 
-        parse_syntax(self, task)
-        result = task.consume_temp_dialog_output()
+        try:
+            parsed = parse_model_response(self.id, model_response)
+            raw_model_text = parsed.text or raw_model_text
+            task.set_temp_dialog_output(parsed.text)
 
-        chat_log(f"{self.id} 回复:\n {result['final_reply']}")
-        task.set_temp_dialog_output(result["final_reply"])
-        task.caller = self
+            parse_syntax(self, task)
+            result = task.consume_temp_dialog_output()
 
-        if result["tool_call"]:
-            task.set_temp_dialog_output(result["tool_call"])
-            self._run_tool(task, emit)
+            chat_log(f"{self.id} 回复:\n {result['final_reply']}")
+            task.set_temp_dialog_output(result["final_reply"])
+            task.caller = self
 
-        elif result["agent_call"]:
-            agent_call = result["agent_call"]
-            target_agent_id = agent_call["target_id"]
-            content_for_target = agent_call["content"]
+            if result["tool_call"]:
+                task.set_temp_dialog_output(result["tool_call"])
+                self._run_tool(task, emit)
 
-            if self._is_user_agent_id(target_agent_id, task):
-                self._emit_user_message(task, emit, content_for_target, final=True)
-                return
+            elif result["agent_call"]:
+                agent_call = result["agent_call"]
+                target_agent_id = agent_call["target_id"]
+                content_for_target = agent_call["content"]
 
-            task.set_temp_dialog_input(content_for_target)
-            self.call_agent(target_agent_id, task, emit)
+                if self._is_user_agent_id(target_agent_id, task):
+                    self._emit_user_message(task, emit, content_for_target, final=True)
+                    return
 
-        elif result["question"]:
-            task.status = "pause"
-            question = result["question"]
-            task.push_context(self, f"{content}<{self.id}>{question}")
-            task.set_temp_dialog_input(f"[询问]{self.id}:{question}")
-            emit(self.build_event(
-                task,
-                "assistant_intermediate",
-                text=question,
-                metadata={"visible_to_user": "true", "final": "false"},
-            ))
+                task.set_temp_dialog_input(content_for_target)
+                self.call_agent(target_agent_id, task, emit)
 
-        elif result["timer_task"]:
-            # 定时任务后续可拆到 timer-task-service。
-            reply = f"已解析定时任务，但 timer-task-service 尚未接入：{result['timer_task']}"
-            task.set_temp_dialog_output(reply)
-            emit(self.build_event(
-                task,
-                "assistant_intermediate",
-                text=reply,
-                metadata={"visible_to_user": "true", "final": "false"},
-            ))
+            elif result["question"]:
+                task.status = "pause"
+                question = result["question"]
+                task.push_context(self, f"{content}<{self.id}>{question}")
+                task.set_temp_dialog_input(f"[询问]{self.id}:{question}")
+                emit(self.build_event(
+                    task,
+                    "assistant_intermediate",
+                    text=question,
+                    metadata={"visible_to_user": "true", "final": "false"},
+                ))
 
-        else:
-            final_reply = result["final_reply"]
-            task.set_temp_dialog_output(final_reply)
+            elif result["timer_task"]:
+                # 定时任务后续可拆到 timer-task-service。
+                reply = f"已解析定时任务，但 timer-task-service 尚未接入：{result['timer_task']}"
+                task.set_temp_dialog_output(reply)
+                emit(self.build_event(
+                    task,
+                    "assistant_intermediate",
+                    text=reply,
+                    metadata={"visible_to_user": "true", "final": "false"},
+                ))
+
+            else:
+                final_reply = result["final_reply"]
+                task.set_temp_dialog_output(final_reply)
+
+        except Exception as exc:
+            self._emit_raw_model_fallback(task, emit, raw_model_text, exc)
+            return
 
     def call_agent(self, target_agent_id: str, task, emit: Callable[[TaskEventDTO], None]):
         content = task.consume_temp_dialog_input()
