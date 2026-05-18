@@ -9,10 +9,10 @@ def env_int(name: str, default: int) -> int:
 
 
 SCHEDULER_HOST = os.getenv("SCHEDULER_HOST", "0.0.0.0")
-SCHEDULER_PORT = env_int("SCHEDULER_PORT", 5300)
+SCHEDULER_PORT = env_int("SCHEDULER_PORT", 5100)
 
-# K8s Service DNS 示例：agent-orchestrator-service:5400
-ORCHESTRATOR_TARGET = os.getenv("ORCHESTRATOR_TARGET", "agent-orchestrator-service:5400")
+# K8s Service DNS 示例：agent-orchestrator-service:5300
+ORCHESTRATOR_TARGET = os.getenv("ORCHESTRATOR_TARGET", "agent-orchestrator-service:5300")
 
 # 对应原 scheduler.py 的 BATCH_SIZE / MAX_TASK_TIME / 队列容量
 BATCH_SIZE = env_int("SCHEDULER_BATCH_SIZE", 2)
