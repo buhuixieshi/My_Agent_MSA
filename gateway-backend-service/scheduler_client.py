@@ -17,6 +17,7 @@ class SchedulerClient:
         raise NotImplementedError
 
 
+<<<<<<< HEAD
 class GrpcSchedulerClient(SchedulerClient):
     """
     真实环境用：直接对接 task-scheduler-service。
@@ -26,6 +27,93 @@ class GrpcSchedulerClient(SchedulerClient):
     - /app/proto_gen/scheduler_pb2_grpc.py
     """
 
+=======
+class MockSchedulerClient(SchedulerClient):
+    def __init__(self) -> None:
+        self._event_queue: asyncio.Queue = asyncio.Queue()
+
+    async def create_task(self, message: FrontendMessage) -> CreateTaskResult:
+        task_id = f"task-{uuid.uuid4().hex[:12]}"
+        session_id = message.session_id or f"web_{message.user_id}"
+
+        await self._event_queue.put(
+            TaskEvent(
+                event_id=f"event-{uuid.uuid4().hex[:12]}",
+                task_id=task_id,
+                user_id=message.user_id,
+                session_id=session_id,
+                channel="web",
+                type="task_queued",
+                waiting=0,
+                delivery_target=DeliveryTarget(
+                    channel="web",
+                    user_id=message.user_id,
+                    conversation_id=session_id,
+                    reply_to=message.client_message_id or "",
+                ),
+            )
+        )
+
+        asyncio.create_task(self._mock_run_task(task_id, message))
+
+        return CreateTaskResult(ok=True, task_id=task_id, status="queued", waiting=0)
+
+    async def _mock_run_task(self, task_id: str, message: FrontendMessage) -> None:
+        session_id = message.session_id or f"web_{message.user_id}"
+
+        await asyncio.sleep(0.4)
+        await self._event_queue.put(
+            TaskEvent(
+                event_id=f"event-{uuid.uuid4().hex[:12]}",
+                task_id=task_id,
+                user_id=message.user_id,
+                session_id=session_id,
+                channel="web",
+                type="task_started",
+                text="Mock task started.",
+            )
+        )
+
+        await asyncio.sleep(0.8)
+        await self._event_queue.put(
+            TaskEvent(
+                event_id=f"event-{uuid.uuid4().hex[:12]}",
+                task_id=task_id,
+                user_id=message.user_id,
+                session_id=session_id,
+                channel="web",
+                type="assistant_message",
+                text=f"Mock gateway reply: {message.content}",
+                images=[],
+            )
+        )
+
+        await asyncio.sleep(0.2)
+        await self._event_queue.put(
+            TaskEvent(
+                event_id=f"event-{uuid.uuid4().hex[:12]}",
+                task_id=task_id,
+                user_id=message.user_id,
+                session_id=session_id,
+                channel="web",
+                type="task_finished",
+                waiting=0,
+            )
+        )
+
+    async def subscribe_events(
+        self,
+        subscriber_id: str,
+        channels: List[str],
+    ) -> AsyncIterator[TaskEvent]:
+        while True:
+            event = await self._event_queue.get()
+            if not channels or event.channel in channels:
+                yield event
+
+
+class GrpcSchedulerClient(SchedulerClient):
+>>>>>>> e8aa957e2d858ae206deae64936a227615426651
     def __init__(self, target: str) -> None:
         self.target = target
 
@@ -87,6 +175,11 @@ class GrpcSchedulerClient(SchedulerClient):
 
         while True:
             try:
+                print(
+                    f"[gateway] subscribe scheduler events target={self.target} subscriber_id={subscriber_id}",
+                    flush=True,
+                )
+
                 async with grpc.aio.insecure_channel(self.target) as channel:
                     stub = scheduler_pb2_grpc.TaskSchedulerServiceStub(channel)
 
@@ -127,6 +220,7 @@ class GrpcSchedulerClient(SchedulerClient):
 
 
 def build_scheduler_client() -> SchedulerClient:
+<<<<<<< HEAD
     """
     no-mock 版本：强制使用 gRPC task-scheduler-service。
 
@@ -138,4 +232,15 @@ def build_scheduler_client() -> SchedulerClient:
     """
 
     target = os.getenv("SCHEDULER_GRPC_TARGET", "task-scheduler-service:5100")
+=======
+    mode = os.getenv("SCHEDULER_CLIENT_MODE", "grpc").lower()
+
+    if mode == "mock":
+        return MockSchedulerClient()
+
+    target = os.getenv(
+        "SCHEDULER_GRPC_TARGET",
+        "task-scheduler-service.agent.svc.cluster.local:5100",
+    )
+>>>>>>> e8aa957e2d858ae206deae64936a227615426651
     return GrpcSchedulerClient(target=target)

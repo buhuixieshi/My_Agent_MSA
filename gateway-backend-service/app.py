@@ -15,8 +15,6 @@ APP_NAME = "gateway-backend-service"
 
 app = FastAPI(title=APP_NAME)
 
-# 使用 Istio 同域名访问时，理论上不需要 CORS。
-# 保留是为了本地直接调试。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
@@ -48,6 +46,7 @@ def ensure_allowed_user(user_id: str) -> None:
 
 async def scheduler_event_consumer() -> None:
     subscriber_id = os.getenv("SUBSCRIBER_ID", "web-gateway-1")
+
     async for event in scheduler_client.subscribe_events(
         subscriber_id=subscriber_id,
         channels=["web"],
@@ -62,16 +61,26 @@ async def on_startup() -> None:
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "service": APP_NAME}
+    return {
+        "ok": True,
+        "service": APP_NAME,
+        "scheduler_client_mode": os.getenv("SCHEDULER_CLIENT_MODE", "grpc"),
+        "scheduler_target": os.getenv(
+            "SCHEDULER_GRPC_TARGET",
+            "task-scheduler-service.agent.svc.cluster.local:5100",
+        ),
+    }
 
 
 @app.post("/api/login", response_model=LoginResponse)
 async def login(req: LoginRequest):
     user_id = req.user_id.strip()
+
     if not user_id:
         raise HTTPException(status_code=400, detail="missing user_id")
 
     ensure_allowed_user(user_id)
+
     session_id = req.session_id or build_session_id(user_id)
 
     return LoginResponse(ok=True, user_id=user_id, session_id=session_id)
@@ -84,6 +93,7 @@ async def create_message(req: FrontendMessage):
 
     if not user_id:
         raise HTTPException(status_code=400, detail="missing user_id")
+
     if not content:
         raise HTTPException(status_code=400, detail="missing content")
 
@@ -93,6 +103,7 @@ async def create_message(req: FrontendMessage):
         req.session_id = build_session_id(user_id)
 
     result = await scheduler_client.create_task(req)
+
     if not result.ok:
         raise HTTPException(
             status_code=500,
