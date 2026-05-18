@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package openviking_context.v1;
+
+message SearchContextRequest {
+  string user_id = 1;
+  string session_id = 2;
+  string query = 3;
+  int32 top_k = 4;
+  int32 max_tokens = 5;
+}
+
+message MemoryHit {
+  string memory_id = 1;
+  string content = 2;
+  double score = 3;
+  int32 token_count = 4;
+}
+
+message ChatMessage {
+  string role = 1;
+  string content = 2;
+}
+
+message SearchContextResponse {
+  string session_summary = 1;
+  repeated MemoryHit memories = 2;
+  repeated ChatMessage recent_messages = 3;
+}
+
+message SearchSkillDocsRequest {
+  string query = 1;
+  repeated string skill_names = 2;
+  int32 top_k = 3;
+  int32 max_tokens = 4;
+}
+
+message SkillDocHit {
+  string skill_name = 1;
+  string doc_id = 2;
+  string chunk_id = 3;
+  string version = 4;
+  string title = 5;
+  string content = 6;
+  int32 token_count = 7;
+  double score = 8;
+}
+
+message SearchSkillDocsResponse {
+  repeated SkillDocHit hits = 1;
+}
+
+message AppendTurnRequest {
+  string user_id = 1;
+  string session_id = 2;
+  string task_id = 3;
+  string user_message = 4;
+  string assistant_message = 5;
+  repeated string tool_summaries = 6;
+  map<string, string> metadata = 7;
+}
+
+message AppendTurnResponse {
+  bool ok = 1;
+  string error = 2;
+}
+
+service OpenVikingContext {
+  rpc SearchContext(SearchContextRequest) returns (SearchContextResponse);
+  rpc SearchSkillDocs(SearchSkillDocsRequest) returns (SearchSkillDocsResponse);
+  rpc AppendTurn(AppendTurnRequest) returns (AppendTurnResponse);
+}

@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-proxy-service
+  namespace: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-proxy-service
+  template:
+    metadata:
+      labels:
+        app: model-proxy-service
+    spec:
+      containers:
+      - name: model-proxy-service
+        image: agent/model-proxy-service:v1
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5302
+        env:
+        - name: MODEL_PROXY_GRPC_PORT
+          value: "5302"
+        - name: MODEL_LIST_PATH
+          value: "/app/config/model_list.json"
+        - name: MODEL_PROFILES_PATH
+          value: "/app/config/model_profiles.json"
+        - name: REQUEST_TIMEOUT_SECONDS
+          value: "300"
+        - name: MOONSHOT_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: model-api-keys
+              key: moonshot_api_key
+              optional: false
+        volumeMounts:
+        - name: my-agent-config
+          mountPath: /app/config
+          subPath: model-proxy/config
+      volumes:
+      - name: my-agent-config
+        persistentVolumeClaim:
+          claimName: my-agent-config-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-proxy-service
+  namespace: agent
+spec:
+  selector:
+    app: model-proxy-service
+  ports:
+  - name: grpc
+    port: 5302
+    targetPort: 5302
+  type: ClusterIP

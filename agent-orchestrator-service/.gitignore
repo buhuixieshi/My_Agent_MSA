@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+app/generated/*_pb2.py
+app/generated/*_pb2_grpc.py
+workspace/

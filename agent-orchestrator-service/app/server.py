@@ -1,0 +1,102 @@
+import sys
+from concurrent import futures
+from pathlib import Path
+
+import grpc
+
+from app import config
+from app.agent_runtime import AgentRuntime
+from app.logger import log
+from app.task_runtime import TaskRuntime
+
+GENERATED_DIR = Path(__file__).parent / "generated"
+if str(GENERATED_DIR) not in sys.path:
+    sys.path.insert(0, str(GENERATED_DIR))
+
+try:
+    import agent_orchestrator_pb2
+    import agent_orchestrator_pb2_grpc
+except ImportError as exc:
+    raise RuntimeError("gRPC generated files not found. Run bash scripts/gen_proto.sh first.") from exc
+
+
+def dto_to_pb(event):
+    delivery = agent_orchestrator_pb2.DeliveryTarget()
+    if event.delivery_target:
+        delivery = agent_orchestrator_pb2.DeliveryTarget(
+            channel=event.delivery_target.channel,
+            user_id=event.delivery_target.user_id,
+            conversation_id=event.delivery_target.conversation_id,
+            reply_to=event.delivery_target.reply_to,
+        )
+
+    return agent_orchestrator_pb2.TaskEvent(
+        event_id=event.event_id,
+        task_id=event.task_id,
+        user_id=event.user_id,
+        session_id=event.session_id,
+        channel=event.channel,
+        type=event.type,
+        text=event.text,
+        images=event.images,
+        waiting=event.waiting,
+        error=event.error,
+        delivery_target=delivery,
+        metadata=event.metadata,
+    )
+
+
+class AgentOrchestratorService(agent_orchestrator_pb2_grpc.AgentOrchestratorServicer):
+    def ExecuteTask(self, request, context):
+        log(
+            "ExecuteTask received "
+            f"task_id={request.task_id} user_id={request.user_id} "
+            f"session_id={request.session_id} channel={request.channel}"
+        )
+
+        task = TaskRuntime.from_execute_request(request)
+        events = []
+
+        def emit(event):
+            events.append(event)
+
+        try:
+            AgentRuntime.process_task(task, emit)
+        except Exception as exc:
+            from app.events import TaskEventDTO, DeliveryTarget, new_event_id
+
+            log(f"ExecuteTask failed: {exc}")
+            events.append(TaskEventDTO(
+                event_id=new_event_id(),
+                task_id=task.task_id,
+                user_id=task.user.id,
+                session_id=task.user.session_id,
+                channel=task.channel,
+                type="task_failed",
+                text=str(exc),
+                error=str(exc),
+                delivery_target=DeliveryTarget(
+                    channel=task.channel,
+                    user_id=task.user.id,
+                    conversation_id=task.user.session_id,
+                    reply_to=task.metadata.get("client_message_id", ""),
+                ),
+                metadata={"final": "true"},
+            ))
+
+        for event in events:
+            yield dto_to_pb(event)
+
+
+def serve():
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=16))
+    agent_orchestrator_pb2_grpc.add_AgentOrchestratorServicer_to_server(
+        AgentOrchestratorService(),
+        server,
+    )
+
+    listen_addr = f"[::]:{config.ORCHESTRATOR_GRPC_PORT}"
+    server.add_insecure_port(listen_addr)
+    server.start()
+    log(f"agent-orchestrator-service started on {listen_addr}")
+    server.wait_for_termination()

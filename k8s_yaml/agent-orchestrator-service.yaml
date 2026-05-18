@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-orchestrator-service
+  namespace: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-orchestrator-service
+  template:
+    metadata:
+      labels:
+        app: agent-orchestrator-service
+    spec:
+      containers:
+      - name: agent-orchestrator-service
+        image: agent/agent-orchestrator-service:v1
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5300
+        env:
+        - name: ORCHESTRATOR_GRPC_PORT
+          value: "5300"
+        - name: OPENVIKING_CONTEXT_TARGET
+          value: "openviking-context-service:5301"
+        - name: MODEL_PROXY_TARGET
+          value: "model-proxy-service:5302"
+        - name: TOOL_RUNTIME_TARGET
+          value: "tool-runtime-service:5303"
+        - name: AGENT_CONFIG_PATH
+          value: "/app/config/agent_list.json"
+        - name: SYSTEM_PROMPT_DIR
+          value: "/app/system_prompt"
+        volumeMounts:
+        - name: my-agent-config
+          mountPath: /app/config
+          subPath: orchestrator/config
+        - name: my-agent-config
+          mountPath: /app/system_prompt
+          subPath: orchestrator/system_prompt
+      volumes:
+      - name: my-agent-config
+        persistentVolumeClaim:
+          claimName: my-agent-config-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-orchestrator-service
+  namespace: agent
+spec:
+  selector:
+    app: agent-orchestrator-service
+  ports:
+  - name: grpc
+    port: 5300
+    targetPort: 5300
+  type: ClusterIP
