@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: model-proxy-service
-        image: agent/model-proxy-service:v1
+        image: agent/model-proxy-service:v3
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5302
