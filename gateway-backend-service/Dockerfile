@@ -5,21 +5,20 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-COPY . /app
+COPY proto /app/proto
+COPY proto_gen /app/proto_gen
+COPY generate_proto.sh /app/generate_proto.sh
+COPY app.py /app/app.py
+COPY schemas.py /app/schemas.py
+COPY sse_hub.py /app/sse_hub.py
+COPY scheduler_client.py /app/scheduler_client.py
 
-# proto 在服务目录内部：/app/proto/scheduler.proto
-# 构建镜像时生成 gRPC Python 文件到 /app/proto_gen。
-RUN mkdir -p /app/proto_gen \
-    && touch /app/proto_gen/__init__.py \
-    && python -m grpc_tools.protoc \
-        -I /app/proto \
-        --python_out=/app/proto_gen \
-        --grpc_python_out=/app/proto_gen \
-        /app/proto/scheduler.proto
+RUN chmod +x /app/generate_proto.sh && /app/generate_proto.sh
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app:/app/proto_gen
-ENV SCHEDULER_CLIENT_MODE=mock
+ENV SCHEDULER_CLIENT_MODE=grpc
+ENV SCHEDULER_GRPC_TARGET=task-scheduler-service.agent.svc.cluster.local:5100
 
 EXPOSE 5210
 

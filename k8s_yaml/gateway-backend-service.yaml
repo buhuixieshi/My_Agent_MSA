@@ -14,6 +14,8 @@ spec:
     metadata:
       labels:
         app: gateway-backend-service
+      annotations:
+        sidecar.istio.io/inject: "false"
     spec:
       containers:
         - name: gateway-backend-service
@@ -23,15 +25,12 @@ spec:
             - name: http
               containerPort: 5210
           env:
-            # mock: 不依赖 scheduler，本地先跑通前端
-            # grpc: 连接 task-scheduler-service:5100
             - name: SCHEDULER_CLIENT_MODE
-              value: "mock"
+              value: "grpc"
             - name: SCHEDULER_GRPC_TARGET
               value: "task-scheduler-service.agent.svc.cluster.local:5100"
             - name: SUBSCRIBER_ID
               value: "web-gateway-1"
-            # 空值表示暂不启用白名单。例：dujiawei,test-user
             - name: USER_WHITELIST
               value: ""
 ---
