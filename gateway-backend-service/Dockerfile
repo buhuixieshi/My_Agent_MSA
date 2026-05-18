@@ -13,7 +13,9 @@ COPY schemas.py /app/schemas.py
 COPY sse_hub.py /app/sse_hub.py
 COPY scheduler_client.py /app/scheduler_client.py
 
-RUN chmod +x /app/generate_proto.sh && /app/generate_proto.sh
+RUN sed -i 's/\r$//' /app/generate_proto.sh && \
+    chmod +x /app/generate_proto.sh && \
+    /app/generate_proto.sh
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app:/app/proto_gen
