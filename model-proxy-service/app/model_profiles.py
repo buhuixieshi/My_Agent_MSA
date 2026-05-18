@@ -55,6 +55,7 @@ class ModelProfileStore:
     }
 
     注意：
+    - 每次 get_profile() 都会重新读取配置文件，方便通过 PV 实时调整模型配置。
     - commit_limit / files / system_prompt 等字段属于 orchestrator，不会传给模型接口。
     - api_key_env 优先从环境变量读取；没有 api_key_env 时才使用 api_key 字段。
     """
@@ -62,7 +63,6 @@ class ModelProfileStore:
     def __init__(self, model_list_path: Path, fallback_profiles_path: Path):
         self.model_list_path = model_list_path
         self.fallback_profiles_path = fallback_profiles_path
-        self._data: dict[str, Any] | None = None
 
     def _active_path(self) -> Path:
         if self.model_list_path.exists():
@@ -70,16 +70,21 @@ class ModelProfileStore:
         return self.fallback_profiles_path
 
     def load(self) -> dict[str, Any]:
-        if self._data is None:
-            path = self._active_path()
-            if not path.exists():
-                raise FileNotFoundError(
-                    f"model list not found: {self.model_list_path} "
-                    f"or fallback {self.fallback_profiles_path}"
-                )
-            with open(path, "r", encoding="utf-8") as f:
-                self._data = json.load(f)
-        return self._data
+        """
+        每次调用都从磁盘/PV 重新读取配置。
+
+        这样修改 /app/config/model_list.json 后，不需要重启 model-proxy-service Pod；
+        下一次 ChatCompletion 请求会读取最新配置。
+        """
+        path = self._active_path()
+        if not path.exists():
+            raise FileNotFoundError(
+                f"model list not found: {self.model_list_path} "
+                f"or fallback {self.fallback_profiles_path}"
+            )
+
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
     def get_profile(self, name: str | None) -> dict[str, Any]:
         data = self.load()

@@ -49,6 +49,64 @@ class AgentRuntime:
         self.load_config()
         self.build_system_prompt()
 
+    @staticmethod
+    def _is_user_object(target, task) -> bool:
+        """
+        判断弹栈目标是否是当前任务的真实用户对象。
+
+        这里保留原始版语义：user 仍然在 agent_context 栈里。
+        但微服务化后，弹到 user 时不能再调用 user.send()，
+        而是要 emit assistant_message，由 scheduler/gateway/frontend 负责投递。
+        """
+        return target is task.user or target.__class__.__name__ == "RuntimeUser"
+
+    @staticmethod
+    def _is_user_agent_id(target_agent_id: str, task) -> bool:
+        """
+        判断模型输出的 对话:xxx|... 是否是在给用户发消息。
+
+        允许：
+        - 对话:user|...
+        - 对话:用户|...
+        - 对话:<真实 user_id>|...
+        """
+        if target_agent_id is None:
+            return False
+
+        raw = str(target_agent_id).strip()
+        normalized = raw.lower()
+
+        return normalized in {"user", "用户"} or raw == str(task.user.id)
+
+    @classmethod
+    def _emit_user_message(
+        cls,
+        task,
+        emit: Callable[[TaskEventDTO], None],
+        text: str,
+        final: bool = True,
+    ) -> str:
+        final_reply = "" if text is None else str(text)
+
+        task.send_text = final_reply
+        task.set_temp_dialog_output(final_reply)
+
+        emit(cls.build_event(
+            task,
+            "assistant_message",
+            text=final_reply,
+            images=list(task.send_images),
+            metadata={
+                "visible_to_user": "true",
+                "final": "true" if final else "false",
+            },
+        ))
+
+        if final:
+            task.status = "completed"
+
+        return final_reply
+
     @classmethod
     def get_agent(cls, agent_id: str, session_id: str, user_id: str = "default") -> "AgentRuntime":
         user_id = user_id or "default"
@@ -103,6 +161,10 @@ class AgentRuntime:
             request = context["input"]
             output = task.consume_temp_dialog_output() or "因不知名原因输出已丢失"
 
+            if cls._is_user_object(task.target, task):
+                final_reply = cls._emit_user_message(task, emit, output, final=True)
+                break
+
             caller_id = getattr(task.caller, "id", "unknown")
             target_id = getattr(task.target, "id", "unknown")
             result = [target_id, request, caller_id, output]
@@ -113,6 +175,9 @@ class AgentRuntime:
 
         if task.status == "running":
             task.status = "completed"
+
+        if not final_reply and task.send_text:
+            final_reply = task.send_text
 
         if final_reply:
             cls.context_client.append_turn(
@@ -254,9 +319,7 @@ class AgentRuntime:
             )
         except Exception as exc:
             error_text = f"【模型请求失败】{exc}"
-            task.set_temp_dialog_output(error_text)
-            emit(self.build_event(task, "assistant_message", text=error_text, metadata={"final": "true"}))
-            task.status = "completed"
+            self._emit_user_message(task, emit, error_text, final=True)
             return
 
         parsed = parse_model_response(self.id, model_response)
@@ -275,8 +338,15 @@ class AgentRuntime:
 
         elif result["agent_call"]:
             agent_call = result["agent_call"]
-            task.set_temp_dialog_input(agent_call["content"])
-            self.call_agent(agent_call["target_id"], task, emit)
+            target_agent_id = agent_call["target_id"]
+            content_for_target = agent_call["content"]
+
+            if self._is_user_agent_id(target_agent_id, task):
+                self._emit_user_message(task, emit, content_for_target, final=True)
+                return
+
+            task.set_temp_dialog_input(content_for_target)
+            self.call_agent(target_agent_id, task, emit)
 
         elif result["question"]:
             task.status = "pause"
@@ -304,16 +374,14 @@ class AgentRuntime:
         else:
             final_reply = result["final_reply"]
             task.set_temp_dialog_output(final_reply)
-            emit(self.build_event(
-                task,
-                "assistant_message",
-                text=final_reply,
-                images=list(task.send_images),
-                metadata={"visible_to_user": "true", "final": "true"},
-            ))
 
     def call_agent(self, target_agent_id: str, task, emit: Callable[[TaskEventDTO], None]):
         content = task.consume_temp_dialog_input()
+
+        if self._is_user_agent_id(target_agent_id, task):
+            self._emit_user_message(task, emit, content, final=True)
+            return
+
         task.push_context(self, content)
         chat_log(f"<{self.session_id}>:{self.id}->{target_agent_id}\n{content}")
         debug_log(f"[agent_call] <{self.session_id}>:{self.id}->{target_agent_id}")
