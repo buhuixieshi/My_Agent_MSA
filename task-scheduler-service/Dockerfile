@@ -8,8 +8,8 @@ COPY . .
 RUN bash scripts/gen_proto.sh
 
 ENV SCHEDULER_HOST=0.0.0.0
-ENV SCHEDULER_PORT=5300
-ENV ORCHESTRATOR_TARGET=agent-orchestrator-service:5400
+ENV SCHEDULER_PORT=5100
+ENV ORCHESTRATOR_TARGET=agent-orchestrator-service:5300
 
-EXPOSE 5300
+EXPOSE 5100
 CMD ["python", "-m", "app.main"]
