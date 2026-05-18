@@ -1,6 +1,5 @@
 import asyncio
 import os
-import uuid
 from typing import AsyncIterator, List
 
 from schemas import CreateTaskResult, DeliveryTarget, FrontendMessage, TaskEvent
@@ -18,115 +17,9 @@ class SchedulerClient:
         raise NotImplementedError
 
 
-class MockSchedulerClient(SchedulerClient):
-    """
-    本地开发用。没有 task-scheduler-service 时，也能让前端和 SSE 先跑起来。
-    """
-
-    def __init__(self) -> None:
-        self._event_queue: asyncio.Queue = asyncio.Queue()
-
-    async def create_task(self, message: FrontendMessage) -> CreateTaskResult:
-        task_id = f"task-{uuid.uuid4().hex[:12]}"
-        session_id = message.session_id or f"web_{message.user_id}"
-
-        await self._event_queue.put(
-            TaskEvent(
-                event_id=f"event-{uuid.uuid4().hex[:12]}",
-                task_id=task_id,
-                user_id=message.user_id,
-                session_id=session_id,
-                channel="web",
-                type="task_queued",
-                waiting=0,
-                delivery_target=DeliveryTarget(
-                    channel="web",
-                    user_id=message.user_id,
-                    conversation_id=session_id,
-                    reply_to=message.client_message_id or "",
-                ),
-            )
-        )
-
-        asyncio.create_task(self._mock_run_task(task_id, message))
-
-        return CreateTaskResult(
-            ok=True,
-            task_id=task_id,
-            status="queued",
-            waiting=0,
-        )
-
-    async def _mock_run_task(self, task_id: str, message: FrontendMessage) -> None:
-        session_id = message.session_id or f"web_{message.user_id}"
-
-        await asyncio.sleep(0.4)
-        await self._event_queue.put(
-            TaskEvent(
-                event_id=f"event-{uuid.uuid4().hex[:12]}",
-                task_id=task_id,
-                user_id=message.user_id,
-                session_id=session_id,
-                channel="web",
-                type="task_started",
-                text="任务开始执行。",
-            )
-        )
-
-        await asyncio.sleep(0.6)
-        await self._event_queue.put(
-            TaskEvent(
-                event_id=f"event-{uuid.uuid4().hex[:12]}",
-                task_id=task_id,
-                user_id=message.user_id,
-                session_id=session_id,
-                channel="web",
-                type="model_call_started",
-                text="正在调用模型。",
-            )
-        )
-
-        await asyncio.sleep(0.8)
-        await self._event_queue.put(
-            TaskEvent(
-                event_id=f"event-{uuid.uuid4().hex[:12]}",
-                task_id=task_id,
-                user_id=message.user_id,
-                session_id=session_id,
-                channel="web",
-                type="assistant_message",
-                text=f"Mock 回复：我收到了你的消息：{message.content}",
-                images=[],
-            )
-        )
-
-        await asyncio.sleep(0.2)
-        await self._event_queue.put(
-            TaskEvent(
-                event_id=f"event-{uuid.uuid4().hex[:12]}",
-                task_id=task_id,
-                user_id=message.user_id,
-                session_id=session_id,
-                channel="web",
-                type="task_finished",
-                waiting=0,
-            )
-        )
-
-    async def subscribe_events(
-        self,
-        subscriber_id: str,
-        channels: List[str],
-    ) -> AsyncIterator[TaskEvent]:
-        while True:
-            event = await self._event_queue.get()
-            if not channels or event.channel in channels:
-                yield event
-
-
 class GrpcSchedulerClient(SchedulerClient):
     """
-    真实环境用。
+    真实环境用：直接对接 task-scheduler-service。
 
     Dockerfile 会在镜像构建时从 ./proto/scheduler.proto 生成：
     - /app/proto_gen/scheduler_pb2.py
@@ -145,14 +38,19 @@ class GrpcSchedulerClient(SchedulerClient):
             import scheduler_pb2_grpc
         return scheduler_pb2, scheduler_pb2_grpc
 
+    @staticmethod
+    def _session_id(message: FrontendMessage) -> str:
+        return message.session_id or f"web_{message.user_id}"
+
     async def create_task(self, message: FrontendMessage) -> CreateTaskResult:
         import grpc
 
         scheduler_pb2, scheduler_pb2_grpc = self._import_proto_modules()
-        session_id = message.session_id or f"web_{message.user_id}"
+        session_id = self._session_id(message)
 
         async with grpc.aio.insecure_channel(self.target) as channel:
             stub = scheduler_pb2_grpc.TaskSchedulerServiceStub(channel)
+
             req = scheduler_pb2.CreateTaskRequest(
                 user_id=message.user_id,
                 session_id=session_id,
@@ -167,7 +65,9 @@ class GrpcSchedulerClient(SchedulerClient):
                 ),
                 metadata=message.metadata,
             )
+
             resp = await stub.CreateTask(req)
+
             return CreateTaskResult(
                 ok=resp.ok,
                 task_id=resp.task_id,
@@ -189,12 +89,15 @@ class GrpcSchedulerClient(SchedulerClient):
             try:
                 async with grpc.aio.insecure_channel(self.target) as channel:
                     stub = scheduler_pb2_grpc.TaskSchedulerServiceStub(channel)
+
                     req = scheduler_pb2.SubscribeEventsRequest(
                         subscriber_id=subscriber_id,
                         channels=channels,
                     )
+
                     async for event in stub.SubscribeEvents(req):
                         delivery_target = None
+
                         if event.delivery_target and event.delivery_target.user_id:
                             delivery_target = DeliveryTarget(
                                 channel=event.delivery_target.channel,
@@ -217,17 +120,22 @@ class GrpcSchedulerClient(SchedulerClient):
                             delivery_target=delivery_target,
                             metadata=dict(event.metadata),
                         )
+
             except Exception as exc:
-                print(f"[gateway] scheduler event subscription disconnected: {exc}")
+                print(f"[gateway] scheduler event subscription disconnected: {exc}", flush=True)
                 await asyncio.sleep(2)
 
 
 def build_scheduler_client() -> SchedulerClient:
-    mode = os.getenv("SCHEDULER_CLIENT_MODE", "mock").lower()
-    if mode == "grpc":
-        target = os.getenv(
-            "SCHEDULER_GRPC_TARGET",
-            "task-scheduler-service.my-agent.svc.cluster.local:5100",
-        )
-        return GrpcSchedulerClient(target=target)
-    return MockSchedulerClient()
+    """
+    no-mock 版本：强制使用 gRPC task-scheduler-service。
+
+    同 namespace agent 内推荐：
+      SCHEDULER_GRPC_TARGET=task-scheduler-service:5100
+
+    跨 namespace 可用：
+      SCHEDULER_GRPC_TARGET=task-scheduler-service.agent.svc.cluster.local:5100
+    """
+
+    target = os.getenv("SCHEDULER_GRPC_TARGET", "task-scheduler-service:5100")
+    return GrpcSchedulerClient(target=target)

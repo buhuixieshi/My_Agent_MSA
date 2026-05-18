@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openviking-context-service
+  namespace: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openviking-context-service
+  template:
+    metadata:
+      labels:
+        app: openviking-context-service
+    spec:
+      containers:
+      - name: openviking-context-service
+        image: agent/openviking-context-service:v1
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5301
+        env:
+        - name: OPENVIKING_CONTEXT_GRPC_PORT
+          value: "5301"
+        - name: VIKING_DATA_DIR
+          value: "/app/viking_data"
+        # 如果镜像里真实 openviking 依赖未准备好，可临时改成 true。
+        - name: MOCK_VIKING
+          value: "false"
+        volumeMounts:
+        - name: openviking-data
+          mountPath: /app/viking_data
+      volumes:
+      - name: openviking-data
+        persistentVolumeClaim:
+          claimName: my-agent-openviking-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openviking-context-service
+  namespace: agent
+spec:
+  selector:
+    app: openviking-context-service
+  ports:
+  - name: grpc
+    port: 5301
+    targetPort: 5301
+  type: ClusterIP

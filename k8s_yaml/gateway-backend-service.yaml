@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: gateway-backend-service
-          image: agent/gateway-backend-service:local
+          image: agent/gateway-backend-service:v1
           imagePullPolicy: Never
           ports:
             - name: http
