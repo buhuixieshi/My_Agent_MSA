@@ -20,7 +20,7 @@ set -euo pipefail
 # ============================================================
 
 # 只需要改这里两项。
-NFS_SERVER="${NFS_SERVER:-172.27.146.29}"
+NFS_SERVER="${NFS_SERVER:-172.29.219.49}"
 NFS_ROOT="${NFS_ROOT:-/srv/nfs/my-agent}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
