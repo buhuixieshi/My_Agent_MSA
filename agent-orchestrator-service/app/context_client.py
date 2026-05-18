@@ -28,7 +28,17 @@ class ContextClient:
             self._stub = openviking_context_pb2_grpc.OpenVikingContextStub(channel)
         return self._stub
 
-    def search_context(self, user_id: str, session_id: str, query: str):
+    def search_context(
+        self,
+        user_id: str,
+        session_id: str,
+        query: str,
+        agent_id: str = "main",
+        top_k: int = 8,
+        max_tokens: int = 3000,
+        max_messages: int = 6,
+        commit_limit: int = 0,
+    ):
         if openviking_context_pb2 is None:
             raise RuntimeError("openviking_context protobuf is not generated")
 
@@ -36,14 +46,21 @@ class ContextClient:
             request = openviking_context_pb2.SearchContextRequest(
                 user_id=user_id,
                 session_id=session_id,
+                agent_id=agent_id or "main",
                 query=query,
-                top_k=8,
-                max_tokens=3000,
+                top_k=top_k,
+                max_tokens=max_tokens,
+                max_messages=max_messages,
+                commit_limit=commit_limit,
             )
             response = self._get_stub().SearchContext(
                 request,
                 timeout=config.CONTEXT_TIMEOUT_SECONDS,
             )
+
+            if getattr(response, "error", ""):
+                debug_log(f"SearchContext returned error: {response.error}")
+
             messages = []
             if response.session_summary:
                 messages.append({
@@ -65,7 +82,17 @@ class ContextClient:
             debug_log(f"SearchContext failed: {exc}")
             return []
 
-    def append_turn(self, user_id: str, session_id: str, task_id: str, user_message: str, assistant_message: str, tool_summaries=None):
+    def append_turn(
+        self,
+        user_id: str,
+        session_id: str,
+        task_id: str,
+        user_message: str,
+        assistant_message: str,
+        agent_id: str = "main",
+        tool_summaries=None,
+        commit_limit: int = 0,
+    ):
         if openviking_context_pb2 is None:
             raise RuntimeError("openviking_context protobuf is not generated")
 
@@ -73,12 +100,18 @@ class ContextClient:
             request = openviking_context_pb2.AppendTurnRequest(
                 user_id=user_id,
                 session_id=session_id,
+                agent_id=agent_id or "main",
                 task_id=task_id,
                 user_message=user_message,
                 assistant_message=assistant_message,
                 tool_summaries=tool_summaries or [],
                 metadata={},
+                commit_limit=commit_limit,
             )
-            self._get_stub().AppendTurn(request, timeout=config.CONTEXT_TIMEOUT_SECONDS)
+            response = self._get_stub().AppendTurn(request, timeout=config.CONTEXT_TIMEOUT_SECONDS)
+            if not response.ok:
+                debug_log(f"AppendTurn returned ok=false: {response.error}")
+            return bool(response.ok)
         except Exception as exc:
             debug_log(f"AppendTurn failed: {exc}")
+            return False

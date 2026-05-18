@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: openviking-context-service
-        image: agent/openviking-context-service:v1
+        image: agent/openviking-context-service:v2
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5301
@@ -24,16 +24,25 @@ spec:
           value: "5301"
         - name: VIKING_DATA_DIR
           value: "/app/viking_data"
-        # 如果镜像里真实 openviking 依赖未准备好，可临时改成 true。
+        - name: OPENVIKING_CONFIG_FILE
+          value: "/etc/openviking/ov.conf"
+        # 如果镜像里真实 openviking 依赖/配置未准备好，可临时改成 true。
         - name: MOCK_VIKING
           value: "false"
         volumeMounts:
         - name: openviking-data
           mountPath: /app/viking_data
+        - name: my-agent-config
+          mountPath: /etc/openviking/ov.conf
+          subPath: openviking/ov.conf
+          readOnly: true
       volumes:
       - name: openviking-data
         persistentVolumeClaim:
           claimName: my-agent-openviking-pvc
+      - name: my-agent-config
+        persistentVolumeClaim:
+          claimName: my-agent-config-pvc
 ---
 apiVersion: v1
 kind: Service
