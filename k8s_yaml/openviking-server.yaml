@@ -1,0 +1,92 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openviking-config
+  namespace: agent
+data:
+  ov.conf: |
+    {
+      "server": {
+        "host": "0.0.0.0",
+        "port": 1933,
+        "root_api_key": "dev-local-openviking-key"
+      },
+      "storage": {
+        "workspace": "/data/openviking/workspace"
+      },
+      "embedding": {
+        "dense": {
+          "provider": "openai",
+          "api_base": "http://172.29.219.49:11434/v1",
+          "api_key": "ollama",
+          "model": "nomic-embed-text:v1.5",
+          "dimension": 768
+        }
+      },
+      "vlm": {
+        "provider": "openai",
+        "api_base": "http://172.29.219.49:11434/v1",
+        "api_key": "ollama",
+        "model": "qwen2.5vl:7b"
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openviking
+  namespace: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openviking
+  template:
+    metadata:
+      labels:
+        app: openviking
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+        - name: openviking
+          image: ghcr.io/volcengine/openviking:v0.3.6
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 1933
+          env:
+            - name: OPENVIKING_CONFIG_FILE
+              value: "/etc/openviking/ov.conf"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openviking
+              readOnly: true
+            - name: data
+              mountPath: /data/openviking
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 1933
+            initialDelaySeconds: 20
+            periodSeconds: 20
+      volumes:
+        - name: config
+          configMap:
+            name: openviking-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: my-agent-openviking-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openviking
+  namespace: agent
+spec:
+  selector:
+    app: openviking
+  ports:
+    - name: http
+      port: 1933
+      targetPort: 1933
+  type: ClusterIP
