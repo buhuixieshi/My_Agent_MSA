@@ -14,7 +14,7 @@ metadata:
 #   干扰手写静态 NFS PV/PVC 的绑定。
 #
 # 变量：
-#   172.27.146.29 -> NFS server IP 或域名
+#   172.29.219.49 -> NFS server IP 或域名
 #   /srv/nfs/my-agent   -> NFS export 根路径，例如 /srv/nfs/my-agent
 # ============================================================
 
@@ -30,7 +30,7 @@ spec:
   - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
   nfs:
-    server: 172.27.146.29
+    server: 172.29.219.49
     path: /srv/nfs/my-agent/config
 ---
 apiVersion: v1
@@ -59,7 +59,7 @@ spec:
   - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
   nfs:
-    server: 172.27.146.29
+    server: 172.29.219.49
     path: /srv/nfs/my-agent/openviking/viking_data
 ---
 apiVersion: v1
@@ -88,7 +88,7 @@ spec:
   - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
   nfs:
-    server: 172.27.146.29
+    server: 172.29.219.49
     path: /srv/nfs/my-agent/assets
 ---
 apiVersion: v1
@@ -117,7 +117,7 @@ spec:
   - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
   nfs:
-    server: 172.27.146.29
+    server: 172.29.219.49
     path: /srv/nfs/my-agent/workspace
 ---
 apiVersion: v1
@@ -146,7 +146,7 @@ spec:
   - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
   nfs:
-    server: 172.27.146.29
+    server: 172.29.219.49
     path: /srv/nfs/my-agent/timer-tasks
 ---
 apiVersion: v1
