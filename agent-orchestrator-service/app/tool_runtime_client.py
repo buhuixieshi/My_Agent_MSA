@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -18,6 +19,23 @@ except ImportError:
     tool_runtime_pb2_grpc = None
 
 
+def _safe_workspace_segment(value: str | None, default: str = "default") -> str:
+    """
+    把 user_id 转成安全目录名，避免 /、\\、.. 等路径逃逸。
+    """
+    raw = str(value or default).strip()
+    if not raw:
+        raw = default
+
+    safe = re.sub(r"[^0-9A-Za-z_.@-]+", "_", raw)
+    safe = safe.strip("._") or default
+
+    if safe in {".", ".."}:
+        safe = default
+
+    return safe
+
+
 class ToolRuntimeClient:
     def __init__(self):
         self._stub = None
@@ -28,9 +46,31 @@ class ToolRuntimeClient:
             self._stub = tool_runtime_pb2_grpc.ToolRuntimeStub(channel)
         return self._stub
 
-    def execute_tool(self, task_id: str, tool_name: str, args: list[str]):
+    def _build_user_workspace_dir(self, user_id: str | None) -> str:
+        """
+        用户长期工作空间规则：
+
+            /app/workspace/users/<user_id>
+
+        不再使用：
+
+            /app/workspace/tasks/<task_id>
+        """
+        safe_user_id = _safe_workspace_segment(user_id)
+        return str(config.WORKSPACE_DIR / "users" / safe_user_id)
+
+    def execute_tool(
+        self,
+        task_id: str,
+        tool_name: str,
+        args: list[str],
+        user_id: str = "default",
+        session_id: str = "",
+    ):
         if tool_runtime_pb2 is None:
             raise RuntimeError("tool_runtime protobuf is not generated")
+
+        workspace_dir = self._build_user_workspace_dir(user_id)
 
         try:
             request = tool_runtime_pb2.ExecuteToolRequest(
@@ -38,8 +78,12 @@ class ToolRuntimeClient:
                 tool_name=tool_name,
                 skill_name=tool_name,
                 args=args,
-                kwargs={},
-                workspace_dir=str(config.WORKSPACE_DIR / "tasks" / task_id),
+                kwargs={
+                    "user_id": str(user_id or "default"),
+                    "session_id": str(session_id or ""),
+                    "workspace_scope": "user",
+                },
+                workspace_dir=workspace_dir,
                 timeout_seconds=config.TOOL_TIMEOUT_SECONDS,
             )
             response = self._get_stub().ExecuteTool(
