@@ -1,52 +1,47 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: model-proxy-service
+  name: model-serving
   namespace: agent
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: model-proxy-service
+      app: model-serving
   template:
     metadata:
       labels:
-        app: model-proxy-service
+        app: model-serving
+      annotations:
+        sidecar.istio.io/inject: "false"
     spec:
       containers:
-      - name: model-proxy-service
-        image: agent/model-proxy-service:v3
-        imagePullPolicy: IfNotPresent
-        ports:
-        - containerPort: 5302
-        env:
-        - name: MODEL_PROXY_GRPC_PORT
-          value: "5302"
-        - name: MODEL_LIST_PATH
-          value: "/app/config/model_list.json"
-        - name: MODEL_PROFILES_PATH
-          value: "/app/config/model_profiles.json"
-        - name: REQUEST_TIMEOUT_SECONDS
-          value: "300"
-        volumeMounts:
-        - name: my-agent-config
-          mountPath: /app/config
-          subPath: model-proxy/config
+        - name: model-serving
+          image: ollama/ollama:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:8000"
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
       volumes:
-      - name: my-agent-config
-        persistentVolumeClaim:
-          claimName: my-agent-config-pvc
+        - name: ollama-data
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: model-proxy-service
+  name: model-serving
   namespace: agent
 spec:
-  selector:
-    app: model-proxy-service
-  ports:
-  - name: grpc
-    port: 5302
-    targetPort: 5302
   type: ClusterIP
+  selector:
+    app: model-serving
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
