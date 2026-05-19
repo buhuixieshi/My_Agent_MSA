@@ -20,15 +20,15 @@ spec:
         ports:
         - containerPort: 5100
         env:
-        - name: SCHEDULER_GRPC_PORT
+        - name: SCHEDULER_PORT
           value: "5100"
         - name: ORCHESTRATOR_TARGET
           value: "agent-orchestrator-service:5300"
-        - name: MAX_TASK_TIME
+        - name: SCHEDULER_MAX_TASK_TIME
           value: "300"
         - name: GRPC_DEADLINE_SECONDS
           value: "310"
-        - name: BATCH_SIZE
+        - name: SCHEDULER_BATCH_SIZE
           value: "2"
 ---
 apiVersion: v1

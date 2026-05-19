@@ -329,13 +329,18 @@ class AgentRuntime:
 
         if final_reply:
             try:
+                default_agent = getattr(task, "default_agent", None)
+                default_agent_id = getattr(default_agent, "id", "main")
+                default_agent_config = getattr(default_agent, "config", {}) or {}
                 cls.context_client.append_turn(
                     user_id=task.user.id,
                     session_id=task.user.session_id,
                     task_id=task.task_id,
                     user_message=task.content,
                     assistant_message=final_reply,
+                    agent_id=default_agent_id,
                     tool_summaries=task.tool_log,
+                    commit_limit=int(default_agent_config.get("commit_limit", 0) or 0),
                 )
             except Exception as exc:
                 debug_log(f"append_turn failed: {exc}")
@@ -428,7 +433,11 @@ class AgentRuntime:
         ] + self.context_client.search_context(
             user_id=task.user.id,
             session_id=task.user.session_id,
+            agent_id=self.id,
             query=content,
+            max_messages=int(self.config.get("max_messages", 6) or 6),
+            max_tokens=int(self.config.get("context_max_tokens", 3000) or 3000),
+            commit_limit=int(self.config.get("commit_limit", 0) or 0),
         )
 
         system_prompt_messages = self.system_prompt
