@@ -14,7 +14,7 @@ from datetime import datetime
 import re
 
 
-_COMMAND_NAMES = ("对话", "工具调用", "询问", "切换", "定时任务")
+_COMMAND_NAMES = ("对话", "工具调用", "切换", "定时任务")
 _COMMAND_LINE_RE = re.compile(
     r"^\s*(?:[-*•]\s*)?(?:" + "|".join(map(re.escape, _COMMAND_NAMES)) + r")\s*:"
 )
@@ -39,11 +39,10 @@ def _is_command_line(line: str) -> bool:
 
 def _find_command_block(full_text: str, command_name: str, allow_multiline: bool = False) -> str | None:
     """
-    只识别“行首指令”。
+    查找行首协议指令。
 
-    旧逻辑使用 re.search("询问:(.*)", full_text, re.DOTALL)，会把普通正文里的
-    “我想询问: ...” 也误判为协议指令。这里要求指令必须独占一行的开头，
-    允许前面有列表符号，避免模型正常解释文本误触发语法分支。
+    注意：`询问:` 不使用本函数；它按兼容原逻辑的方式在最后判断，
+    只要文本任意位置出现 `询问:`，就取其后的全部内容作为用户可见问题。
     """
     pattern = re.compile(rf"^\s*(?:[-*•]\s*)?{re.escape(command_name)}\s*:\s*(.*)$")
     lines = full_text.splitlines() or [full_text]
@@ -66,6 +65,20 @@ def _find_command_block(full_text: str, command_name: str, allow_multiline: bool
     return None
 
 
+def _find_question_tail(full_text: str) -> str | None:
+    """
+    兼容 `询问:xxx` 的原始宽松写法。
+
+    和其他协议不同，`询问:` 允许出现在文本任意位置；一旦最后轮到
+    询问逻辑，就把 `询问:` 之后的全部内容直接作为要发给用户的问题。
+    """
+    marker = "询问:"
+    index = full_text.find(marker)
+    if index < 0:
+        return None
+    return full_text[index + len(marker):].strip()
+
+
 def to_timestamp(time_str: str) -> float:
     dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
     return dt.timestamp()
@@ -82,6 +95,7 @@ def parse_syntax(agent, task):
     question = None
     timer_task = None
 
+    # 保持和原项目接近的优先级：先解析智能体调用。
     agent_line = _find_command_block(full_text, "对话", allow_multiline=True)
     if agent_line and "|" in agent_line:
         target_id, content = agent_line.split("|", 1)
@@ -93,6 +107,7 @@ def parse_syntax(agent, task):
                 "content": content,
             }
 
+    # 然后解析工具调用。
     tool_line = _find_command_block(full_text, "工具调用", allow_multiline=False)
     if tool_line:
         memory = task.consume_temp_dialog_input() or "本条记录因不知名原因丢失"
@@ -109,12 +124,7 @@ def parse_syntax(agent, task):
                 "args": args,
             }
 
-    question_line = _find_command_block(full_text, "询问", allow_multiline=True)
-    if question_line:
-        question = question_line.strip()
-        if not agent_call and not tool_call:
-            reply = question
-
+    # 切换智能体只做状态更新，不直接抢占工具/智能体调用。
     switch_line = _find_command_block(full_text, "切换", allow_multiline=False)
     if switch_line:
         agent_id = switch_line.strip()
@@ -129,6 +139,7 @@ def parse_syntax(agent, task):
                 agent.set_default_agent(agent_id)
             break
 
+    # 定时任务在询问之前判断，避免同时出现时被询问分支抢走。
     timer_line = _find_command_block(full_text, "定时任务", allow_multiline=False)
     if timer_line:
         match_timer = re.match(r"([^|]+)\|([^|]+)(?:\|(.+))?", timer_line)
@@ -146,6 +157,13 @@ def parse_syntax(agent, task):
                 }
             except Exception:
                 pass
+
+    # 最后才判断询问：只有没有工具、智能体调用、定时任务时，才把
+    # `询问:` 之后的全部内容作为最终用户可见问题。
+    question_tail = _find_question_tail(full_text)
+    if question_tail is not None and not tool_call and not agent_call and not timer_task:
+        question = question_tail
+        reply = question
 
     task.set_temp_dialog_output({
         "final_reply": reply,
