@@ -17,7 +17,7 @@ data:
       "embedding": {
         "dense": {
           "provider": "openai",
-          "api_base": "http://172.29.219.49:11434/v1",
+          "api_base": "http://model-serving:8000/v1",
           "api_key": "ollama",
           "model": "nomic-embed-text:v1.5",
           "dimension": 768
@@ -25,9 +25,9 @@ data:
       },
       "vlm": {
         "provider": "openai",
-        "api_base": "http://172.29.219.49:11434/v1",
+        "api_base": "http://model-serving:8000/v1",
         "api_key": "ollama",
-        "model": "qwen2.5vl:7b"
+        "model": "llama3.1:8b"
       }
     }
 ---
