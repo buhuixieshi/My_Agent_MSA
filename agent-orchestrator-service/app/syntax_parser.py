@@ -20,6 +20,7 @@ _COMMAND_LINE_RE = re.compile(
     r"^\s*(?:[-*•]\s*)?(?:" + "|".join(map(re.escape, _COMMAND_NAMES)) + r")\s*:"
 )
 _SHELL_TOOL_NAMES = {"shell", "run-shell", "command"}
+_PRIORITY_SHELL_RE = re.compile(r"^\s*(?:[-*•]\s*)?工具调用\s*:\s*shell\s*\|\s*(.*)$")
 
 
 def clean_ai_thinking(text: str) -> str:
@@ -123,6 +124,44 @@ def _parse_tool_call(tool_line: str) -> dict | None:
     }
 
 
+def _find_priority_shell_call(full_text: str) -> tuple[str, dict] | tuple[None, None]:
+    """
+    最高优先级识别 `工具调用:shell|...`。
+
+    shell 命令本身经常包含 `|`、`>`、`&&`、`;` 等 shell 语法，
+    因此不能等普通工具协议解析。只要任何一行命中 `工具调用:shell|`，
+    就把它视作本轮唯一工具调用，并保留其后的原始命令文本。
+
+    如果 shell 命令写成多行，则会继续读取后续非协议行，直到遇到
+    下一条 `对话:` / `工具调用:` / `切换:` / `定时任务:`。
+    """
+    lines = full_text.splitlines() or [full_text]
+
+    for index, line in enumerate(lines):
+        match = _PRIORITY_SHELL_RE.match(line)
+        if not match:
+            continue
+
+        command_lines = [match.group(1).strip()]
+        for extra_line in lines[index + 1:]:
+            if _is_command_line(extra_line):
+                break
+            command_lines.append(extra_line.rstrip())
+
+        command = "\n".join(command_lines).strip()
+        if not command:
+            return None, None
+
+        tool_line = f"shell|{command}"
+        return tool_line, {
+            "tool": "shell",
+            "args": [command],
+            "kwargs": {"command": command},
+        }
+
+    return None, None
+
+
 def to_timestamp(time_str: str) -> float:
     dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
     return dt.timestamp()
@@ -139,6 +178,27 @@ def parse_syntax(agent, task):
     question = None
     timer_task = None
     switch_call = None
+
+    # 最高优先级：shell 原始命令。
+    # 只要命中 `工具调用:shell|...`，就不要再解析其它协议，避免 shell
+    # 管道/重定向/多行命令被普通工具分隔逻辑或对话/切换逻辑干扰。
+    priority_tool_line, priority_tool_call = _find_priority_shell_call(full_text)
+    if priority_tool_call:
+        memory = task.consume_temp_dialog_input() or "本条记录因不知名原因丢失"
+        memory += "\n调用了工具:" + priority_tool_line
+        task.tool_log.append("调用了工具:" + priority_tool_line)
+        task.push_context(agent, memory)
+
+        task.set_temp_dialog_output({
+            "final_reply": reply,
+            "reply": full_text,
+            "tool_call": priority_tool_call,
+            "agent_call": None,
+            "question": None,
+            "timer_task": None,
+            "switch_call": None,
+        })
+        return
 
     # 保持和原项目接近的优先级：先解析智能体调用。
     agent_line = _find_command_block(full_text, "对话", allow_multiline=True)
