@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -13,17 +15,18 @@ class SkillRuntime:
     """
     OpenClaw / ClawHub skill runtime for My_Agent_MSA.
 
-    This module mirrors the original project's core/Agent/Skill_manager.py behavior,
-    but keeps skill management outside tool-runtime-service/app/server.py.
+    Skill logic is kept outside server.py. ClawHub download/install/list/uninstall
+    commands run on an external VM by default, while the installed files still go
+    to the shared skill directory.
 
-    Directory layout is intentionally shared by all users:
+    Shared directory layout for all users:
 
         /app/workspace/skill/<skill_slug>/SKILL.md
         /app/workspace/skill/<skill_slug>/scripts/<skill_slug>.py
         /app/workspace/skill/viking_data/
 
-    User workspaces stay under /app/workspace/users/<user_id>, but installed skills
-    and Viking skill indexes are global for the tool-runtime-service instance.
+    The external VM must mount the same shared directory. If the path is different
+    on the VM, set CLAW_EXTERNAL_VM_SKILL_ROOT_DIR to that VM-side path.
     """
 
     def __init__(self) -> None:
@@ -72,7 +75,7 @@ class SkillRuntime:
             output += f"\n[stderr]\n{stderr}"
         return output
 
-    def _run_command(self, command: list[str], cwd: Path | None = None, timeout: int | None = None) -> str:
+    def _run_local_command(self, command: list[str], cwd: Path | None = None, timeout: int | None = None) -> str:
         self._ensure_dirs()
         proc = subprocess.run(
             command,
@@ -83,6 +86,48 @@ class SkillRuntime:
             timeout=timeout or config.DEFAULT_TIMEOUT_SECONDS,
         )
         return self._format_completed_process(proc)
+
+    def _external_vm_target(self) -> str:
+        user = config.CLAW_EXTERNAL_VM_USER.strip()
+        host = config.CLAW_EXTERNAL_VM_HOST.strip()
+        if not host:
+            raise RuntimeError("CLAW_EXTERNAL_VM_HOST is required when CLAW_DOWNLOAD_MODE=external-vm")
+        return f"{user}@{host}" if user else host
+
+    def _ssh_base_command(self) -> list[str]:
+        command = ["ssh", "-p", str(config.CLAW_EXTERNAL_VM_PORT)]
+        if not config.CLAW_EXTERNAL_VM_STRICT_HOST_KEY_CHECKING:
+            command.extend([
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+            ])
+        if config.CLAW_EXTERNAL_VM_SSH_KEY:
+            command.extend(["-i", config.CLAW_EXTERNAL_VM_SSH_KEY])
+        command.append(self._external_vm_target())
+        return command
+
+    def _run_external_vm_shell(self, script: str, timeout: int | None = None) -> str:
+        proc = subprocess.run(
+            self._ssh_base_command() + [script],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout or config.DEFAULT_TIMEOUT_SECONDS,
+        )
+        return self._format_completed_process(proc)
+
+    def _run_clawhub(self, args: list[str], timeout: int | None = None) -> str:
+        """Run clawhub on the configured external VM by default."""
+        clawhub_bin = config.CLAW_EXTERNAL_VM_CLAWHUB_BIN or "clawhub"
+
+        if config.CLAW_DOWNLOAD_MODE in {"local", "container"}:
+            return self._run_local_command([clawhub_bin, *args], timeout=timeout)
+
+        if config.CLAW_DOWNLOAD_MODE not in {"external-vm", "external_vm", "ssh"}:
+            raise RuntimeError(f"unsupported CLAW_DOWNLOAD_MODE={config.CLAW_DOWNLOAD_MODE!r}")
+
+        quoted = " ".join(shlex.quote(str(part)) for part in [clawhub_bin, *args])
+        return self._run_external_vm_shell(quoted, timeout=timeout)
 
     @staticmethod
     def _first_arg(args: list[str], kwargs: dict[str, str], *names: str) -> str:
@@ -147,22 +192,21 @@ class SkillRuntime:
             skill_slug = self._first_arg(args, kwargs, "skill_slug", "skill", "name")
             return self.add_skill_to_viking(skill_slug)
 
-        # Match the original ToolManager behavior: if a tool name is not a
-        # registered native tool, treat it as an installed skill name.
         return self.run_skill(name, args=args, user_workspace=user_workspace, timeout=timeout)
 
     def clawhub_search(self, keyword: str, timeout: int) -> str:
         if not keyword:
             return "错误：搜索关键词不能为空"
-        return self._run_command(["clawhub", "search", keyword], timeout=timeout)
+        return self._run_clawhub(["search", keyword], timeout=timeout)
 
     def clawhub_install(self, skill_slug: str, timeout: int) -> str:
         if not skill_slug:
             return "错误：技能名称不能为空"
 
         self._ensure_dirs()
-        result = self._run_command(
-            ["clawhub", "install", skill_slug, "--dir", str(self.skill_root), "--force"],
+        vm_skill_root = config.CLAW_EXTERNAL_VM_SKILL_ROOT_DIR
+        result = self._run_clawhub(
+            ["install", skill_slug, "--dir", vm_skill_root, "--force"],
             timeout=timeout,
         )
         add_result = self.add_skill_to_viking(skill_slug)
@@ -188,7 +232,7 @@ class SkillRuntime:
             return f"❌ 导入技能失败：{exc}"
 
     def clawhub_list(self, timeout: int) -> str:
-        return self._run_command(["clawhub", "list"], timeout=timeout)
+        return self._run_clawhub(["list"], timeout=timeout)
 
     def skill_delete(self, skill_slug: str, timeout: int) -> str:
         if not skill_slug:
@@ -199,7 +243,7 @@ class SkillRuntime:
         except Exception:
             pass
 
-        uninstall_result = self._run_command(["clawhub", "uninstall", "--yes", skill_slug], timeout=timeout)
+        uninstall_result = self._run_clawhub(["uninstall", "--yes", skill_slug], timeout=timeout)
 
         skill_dir = self.skill_root / skill_slug
         if skill_dir.exists():
@@ -278,7 +322,7 @@ class SkillRuntime:
             stderr=subprocess.PIPE,
             timeout=timeout,
             env={
-                **__import__("os").environ,
+                **os.environ,
                 "MY_AGENT_WORKSPACE": str(user_workspace),
                 "MY_AGENT_SKILL_ROOT": str(self.skill_root),
                 "MY_AGENT_SKILL_DIR": str(skill_dir),
