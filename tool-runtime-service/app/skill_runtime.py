@@ -41,7 +41,9 @@ class SkillRuntime:
     OpenClaw / ClawHub skill runtime for My_Agent_MSA.
 
     - ClawHub commands run on an external VM or WSL by default.
-    - Skill indexing/querying always uses the OpenViking service.
+    - Skill indexing/querying uses the OpenViking service.
+    - OpenViking HTTP access mirrors openviking-context-service:
+      root-key calls include account, user, and agent headers.
     - Skills are shared by all users under SKILL_ROOT_DIR.
     """
 
@@ -56,7 +58,12 @@ class SkillRuntime:
             return await value
         return value
 
-    def _client_kwargs(self, client_cls) -> dict[str, Any]:
+    def _openviking_identity(self) -> tuple[str, str]:
+        user_id = (getattr(config, "OPENVIKING_USER", "") or "system").strip()
+        agent_id = (getattr(config, "OPENVIKING_AGENT", "") or "skills").strip()
+        return user_id, agent_id
+
+    def _client_kwargs(self, client_cls, user_id: str, agent_id: str) -> dict[str, Any]:
         kwargs: dict[str, Any] = {}
         try:
             params = inspect.signature(client_cls).parameters
@@ -83,14 +90,30 @@ class SkillRuntime:
             elif "account_id" in params:
                 kwargs["account_id"] = config.OPENVIKING_ACCOUNT
 
+        if user_id:
+            if "user_id" in params:
+                kwargs["user_id"] = user_id
+            elif "user" in params:
+                kwargs["user"] = user_id
+
+        if agent_id:
+            if "agent_id" in params:
+                kwargs["agent_id"] = agent_id
+            elif "agent" in params:
+                kwargs["agent"] = agent_id
+
         return kwargs
 
-    def _apply_openviking_headers(self, client) -> None:
+    def _apply_openviking_headers(self, client, user_id: str, agent_id: str) -> None:
         for attr, value in (
             ("api_key", config.OPENVIKING_API_KEY),
             ("root_api_key", config.OPENVIKING_API_KEY),
             ("account", config.OPENVIKING_ACCOUNT),
             ("account_id", config.OPENVIKING_ACCOUNT),
+            ("user_id", user_id),
+            ("user", user_id),
+            ("agent_id", agent_id),
+            ("agent", agent_id),
         ):
             if value and hasattr(client, attr):
                 try:
@@ -105,6 +128,10 @@ class SkillRuntime:
             extra_headers["X-OpenViking-API-Key"] = config.OPENVIKING_API_KEY
         if config.OPENVIKING_ACCOUNT:
             extra_headers["X-OpenViking-Account"] = config.OPENVIKING_ACCOUNT
+        if user_id:
+            extra_headers["X-OpenViking-User"] = user_id
+        if agent_id:
+            extra_headers["X-OpenViking-Agent"] = agent_id
 
         for holder in (
             client,
@@ -133,16 +160,19 @@ class SkillRuntime:
         if client_cls is None:
             raise RuntimeError("openviking.AsyncHTTPClient is not available")
 
+        user_id, agent_id = self._openviking_identity()
+
         try:
-            client = client_cls(**self._client_kwargs(client_cls))
+            client = client_cls(**self._client_kwargs(client_cls, user_id=user_id, agent_id=agent_id))
         except TypeError:
             client = client_cls(config.OPENVIKING_SERVER_URL)
 
-        self._apply_openviking_headers(client)
+        self._apply_openviking_headers(client, user_id=user_id, agent_id=agent_id)
         initialize = getattr(client, "initialize", None)
         if initialize is not None:
             await self._maybe_await(initialize())
-        self._apply_openviking_headers(client)
+        # initialize() may create the actual HTTP client, so patch headers after it too.
+        self._apply_openviking_headers(client, user_id=user_id, agent_id=agent_id)
         return client
 
     async def _close_openviking_client(self, client) -> None:
