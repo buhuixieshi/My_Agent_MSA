@@ -124,11 +124,14 @@ def parse_syntax(agent, task):
                 "args": args,
             }
 
-    # 切换智能体只做状态更新，不直接抢占工具/智能体调用。
+    switch_target = None
+
+    # 切换智能体：更新默认智能体；如果模型只输出切换指令，则把本轮原始请求立即转交给目标智能体。
     switch_line = _find_command_block(full_text, "切换", allow_multiline=False)
     if switch_line:
         agent_id = switch_line.strip()
         if agent_id:
+            switch_target = agent_id
             agent.set_default_agent(agent_id)
 
     for line in full_text.splitlines():
@@ -136,8 +139,21 @@ def parse_syntax(agent, task):
         if match_switch2:
             agent_id = match_switch2.group(1).strip()
             if agent_id:
+                switch_target = agent_id
                 agent.set_default_agent(agent_id)
             break
+
+    if (
+        switch_target
+        and not agent_call
+        and not tool_call
+        and switch_target != getattr(agent, "id", "")
+        and full_text in {f"切换:{switch_target}", f"切换到{switch_target}智能体"}
+    ):
+        agent_call = {
+            "target_id": switch_target,
+            "content": getattr(task, "content", "") or full_text,
+        }
 
     # 定时任务在询问之前判断，避免同时出现时被询问分支抢走。
     timer_line = _find_command_block(full_text, "定时任务", allow_multiline=False)
