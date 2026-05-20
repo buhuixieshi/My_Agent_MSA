@@ -87,7 +87,8 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
             rel = kwargs.get("path") or (args[0] if args else "")
             return delete_path(root, rel)
 
-        if name == "shell":
+        # Shell 执行
+        if name in {"run-shell", "shell", "command"}:
             return self._run_shell(args=args, kwargs=kwargs, root=root, timeout=timeout)
 
         # Skill 相关管理工具和未知工具名都交给独立 skill_runtime。
@@ -156,7 +157,11 @@ def serve():
     log(f"tool-runtime-service started on {listen_addr}")
     log(f"workspace dir: {config.WORKSPACE_DIR}")
     log(f"skill root dir: {config.SKILL_ROOT_DIR}")
-    log(f"skill viking data dir: {config.SKILL_VIKING_DATA_DIR}")
+    log(f"openviking server url: {config.OPENVIKING_SERVER_URL}")
     log(f"shell tools enabled: {config.ENABLE_SHELL_TOOLS}")
 
     server.wait_for_termination()
+
+
+if __name__ == "__main__":
+    serve()
