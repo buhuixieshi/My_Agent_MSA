@@ -59,7 +59,10 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
             )
 
     def _dispatch(self, tool_name: str, args: list[str], kwargs: dict[str, str], root: Path, timeout: int) -> str:
-        name = tool_name.lower().replace("-", "_")
+        # 与原项目 core/Agent/Tool_manager.py 保持一致：
+        # 工具名使用 OpenClaw/ClawHub 风格的短横线命名，并按原名精确分发。
+        # 不再把外部工具名自动从 '-' 转成 '_' 作为标准名。
+        name = (tool_name or "").strip()
 
         if name in {"", "help"}:
             return self._help()
@@ -67,33 +70,33 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
         if name == "echo":
             return kwargs.get("text") or " ".join(args)
 
-        if name in {"list_workspace", "list_files", "workspace_list", "ls"}:
+        if name == "list-workspace":
             return list_workspace(root, config.MAX_LIST_FILES)
 
-        if name in {"read_file", "cat"}:
+        if name == "file-read":
             rel = kwargs.get("path") or (args[0] if args else "")
             return read_text(root, rel, config.MAX_READ_BYTES)
 
-        if name == "write_file":
+        if name == "file-write":
             rel = kwargs.get("path") or (args[0] if args else "")
             text = kwargs.get("text") or (args[1] if len(args) > 1 else "")
             return write_text(root, rel, text)
 
-        if name in {"delete_file", "remove_file", "rm"}:
+        # MSA 额外保留的文件删除工具，命名仍使用短横线风格。
+        if name == "delete-file":
             rel = kwargs.get("path") or (args[0] if args else "")
             return delete_path(root, rel)
 
-        if name in {"run_shell", "shell", "command"}:
+        if name == "shell":
             return self._run_shell(args=args, kwargs=kwargs, root=root, timeout=timeout)
 
         raise ValueError(
-            f"unknown tool_name={tool_name!r}; supported: help, echo, list_workspace, read_file, write_file, delete_file"
-            + (", run_shell" if config.ENABLE_SHELL_TOOLS else "")
+            f"unknown tool_name={tool_name!r}; supported: help, echo, shell, list-workspace, file-read, file-write, delete-file"
         )
 
     def _run_shell(self, args: list[str], kwargs: dict[str, str], root: Path, timeout: int) -> str:
         if not config.ENABLE_SHELL_TOOLS:
-            raise PermissionError("run_shell is disabled. Set ENABLE_SHELL_TOOLS=true to enable it.")
+            raise PermissionError("shell is disabled. Set ENABLE_SHELL_TOOLS=true to enable it.")
 
         command = kwargs.get("command") or " ".join(args)
         if not command:
@@ -118,11 +121,11 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
     def _help(self) -> str:
         return """tool-runtime-service tools:
 - echo: args or kwargs.text
-- list_workspace / list_files / ls
-- read_file: kwargs.path or args[0]
-- write_file: kwargs.path + kwargs.text, or args[0] + args[1]
-- delete_file: kwargs.path or args[0], file or empty directory only
-- run_shell: disabled by default; set ENABLE_SHELL_TOOLS=true
+- shell: run system command (disabled by default)
+- list-workspace: list all files in workspace
+- file-read: kwargs.path or args[0]
+- file-write: kwargs.path + kwargs.text, or args[0] + args[1]
+- delete-file: kwargs.path or args[0], file or empty directory only
 """
 
 
