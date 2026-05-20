@@ -1,5 +1,4 @@
 import json
-import re
 from collections import OrderedDict
 from pathlib import Path
 from typing import Callable
@@ -112,86 +111,6 @@ class AgentRuntime:
         except Exception:
             return ""
 
-    @staticmethod
-    def _parse_direct_write_file_request(text: str) -> tuple[str, str] | None:
-        """
-        识别常见的直接文件写入请求，绕过大模型工具规划，避免简单文件操作因模型/调度超时失败。
-
-        支持示例：
-        - 在工作空间创建一个名为你好.txt的文件 内容为hello
-        - 创建一个名为 a.txt 的文件，内容为 hello
-        - 创建文件 a.txt 内容为 hello
-        - 写入文件 a.txt 内容为 hello
-        """
-        content = (text or "").strip()
-        if not content:
-            return None
-
-        if not re.search(r"(创建|新建|写入|生成).{0,20}文件", content):
-            return None
-
-        patterns = [
-            r"(?:创建|新建|写入|生成).*?(?:名为|叫|文件名为)\s*[`'\"“”]?([^`'\"“”\s，,]+)[`'\"“”]?\s*(?:的文件)?\s*[,，。；;\s]*.*?(?:内容为|内容是|内容[:：])\s*([\s\S]+)$",
-            r"(?:创建|新建|写入|生成)\s*(?:一个)?\s*(?:文件)?\s*[`'\"“”]?([^`'\"“”\s，,]+)[`'\"“”]?\s*[,，。；;\s]*.*?(?:内容为|内容是|内容[:：])\s*([\s\S]+)$",
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, content)
-            if not match:
-                continue
-
-            file_path = match.group(1).strip().strip("`'\"“”")
-            file_content = match.group(2).strip()
-
-            if not file_path or file_path in {".", ".."}:
-                return None
-
-            return file_path, file_content
-
-        return None
-
-    @classmethod
-    def _try_handle_direct_workspace_file_write(
-        cls,
-        task,
-        emit: Callable[[TaskEventDTO], None],
-    ) -> bool:
-        parsed = cls._parse_direct_write_file_request(task.content)
-        if not parsed:
-            return False
-
-        file_path, file_content = parsed
-        debug_log(
-            f"[direct_workspace_write] user_id={task.user.id} "
-            f"path={file_path} content_bytes={len(file_content.encode('utf-8'))}"
-        )
-
-        emit(cls.build_event(
-            task,
-            "assistant_intermediate",
-            text=f"正在写入工作空间文件：{file_path}",
-            metadata={"visible_to_user": "false", "final": "false"},
-        ))
-
-        result = cls.tool_client.execute_tool(
-            task_id=task.task_id,
-            tool_name="file-write",
-            args=[file_path, file_content],
-            user_id=task.user.id,
-            session_id=task.user.session_id,
-        )
-
-        if result["ok"]:
-            task.tool_log.append(f"file-write {file_path}: {result['output']}")
-            reply = f"已在你的工作空间创建文件 `{file_path}`，内容已写入。"
-            cls._emit_user_message(task, emit, reply, final=True)
-        else:
-            error = f"创建文件失败：{result['error']}"
-            task.status = "failed"
-            emit(cls.build_event(task, "task_failed", error=error, text=error))
-
-        return True
-
     @classmethod
     def _emit_user_message(
         cls,
@@ -275,10 +194,6 @@ class AgentRuntime:
         final_reply = ""
 
         emit(cls.build_event(task, "task_started"))
-
-        if cls._try_handle_direct_workspace_file_write(task, emit):
-            emit(cls.build_event(task, "task_completed"))
-            return task.send_text or "文件写入完成"
 
         if len(task.agent_context) == 1:
             try:
