@@ -157,7 +157,7 @@ def serve():
     log(f"tool-runtime-service started on {listen_addr}")
     log(f"workspace dir: {config.WORKSPACE_DIR}")
     log(f"skill root dir: {config.SKILL_ROOT_DIR}")
-    log(f"skill viking data dir: {config.SKILL_VIKING_DATA_DIR}")
+    log(f"openviking server url: {config.OPENVIKING_SERVER_URL}")
     log(f"shell tools enabled: {config.ENABLE_SHELL_TOOLS}")
 
     server.wait_for_termination()
