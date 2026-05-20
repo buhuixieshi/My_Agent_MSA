@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Iterable, Any
+from typing import Any, Iterable
 
 from app import config
 
@@ -41,18 +41,15 @@ class SkillRuntime:
     OpenClaw / ClawHub skill runtime for My_Agent_MSA.
 
     - ClawHub commands run on an external VM or WSL by default.
-    - Skill indexing/querying uses the OpenViking service by default.
+    - Skill indexing/querying always uses the OpenViking service.
     - Skills are shared by all users under SKILL_ROOT_DIR.
     """
 
     def __init__(self) -> None:
         self.skill_root = Path(config.SKILL_ROOT_DIR)
-        self.viking_data_dir = Path(config.SKILL_VIKING_DATA_DIR)
-        self._client = None
 
     def _ensure_dirs(self) -> None:
         self.skill_root.mkdir(parents=True, exist_ok=True)
-        self.viking_data_dir.mkdir(parents=True, exist_ok=True)
 
     async def _maybe_await(self, value):
         if inspect.isawaitable(value):
@@ -126,7 +123,7 @@ class SkillRuntime:
             except Exception:
                 pass
 
-    async def _new_server_client(self):
+    async def _new_openviking_client(self):
         if not config.OPENVIKING_SERVER_URL:
             raise RuntimeError("OPENVIKING_SERVER_URL is empty")
 
@@ -148,7 +145,7 @@ class SkillRuntime:
         self._apply_openviking_headers(client)
         return client
 
-    async def _close_server_client(self, client) -> None:
+    async def _close_openviking_client(self, client) -> None:
         for name in ("aclose", "close"):
             method = getattr(client, name, None)
             if method is None:
@@ -159,40 +156,9 @@ class SkillRuntime:
             except Exception:
                 return
 
-    def _get_viking_client(self):
-        self._ensure_dirs()
-        if self._client is not None:
-            return self._client
-
-        try:
-            import openviking as ov
-        except Exception as exc:
-            raise RuntimeError(
-                "openviking is not installed in tool-runtime-service. "
-                "Add openviking to requirements.txt and rebuild the image."
-            ) from exc
-
-        if config.OPENVIKING_BACKEND == "server":
-            # Keep a lightweight marker. Server clients are opened per operation
-            # because AsyncHTTPClient owns async resources.
-            self._client = "server"
-            return self._client
-
-        if hasattr(ov, "SyncOpenViking"):
-            client = ov.SyncOpenViking(path=str(self.viking_data_dir))
-        else:
-            client = ov.OpenViking(path=str(self.viking_data_dir))
-
-        client.initialize()
-        self._client = client
-        return client
-
-    def _viking_add_skill(self, skill_md_path: str):
-        if config.OPENVIKING_BACKEND != "server":
-            return self._get_viking_client().add_skill(skill_md_path, wait=True)
-
+    def _openviking_add_skill(self, skill_md_path: str):
         async def run():
-            client = await self._new_server_client()
+            client = await self._new_openviking_client()
             try:
                 add_skill = getattr(client, "add_skill", None)
                 if add_skill is None:
@@ -202,16 +168,13 @@ class SkillRuntime:
                 except TypeError:
                     return await self._maybe_await(add_skill(skill_md_path))
             finally:
-                await self._close_server_client(client)
+                await self._close_openviking_client(client)
 
         return _run_coro_sync(run())
 
-    def _viking_ls(self, uri: str, simple: bool = False):
-        if config.OPENVIKING_BACKEND != "server":
-            return self._get_viking_client().ls(uri, simple=simple) if simple else self._get_viking_client().ls(uri)
-
+    def _openviking_ls(self, uri: str, simple: bool = False):
         async def run():
-            client = await self._new_server_client()
+            client = await self._new_openviking_client()
             try:
                 ls = getattr(client, "ls", None)
                 if ls is None:
@@ -221,39 +184,33 @@ class SkillRuntime:
                 except TypeError:
                     return await self._maybe_await(ls(uri))
             finally:
-                await self._close_server_client(client)
+                await self._close_openviking_client(client)
 
         return _run_coro_sync(run())
 
-    def _viking_read(self, uri: str):
-        if config.OPENVIKING_BACKEND != "server":
-            return self._get_viking_client().read(uri)
-
+    def _openviking_read(self, uri: str):
         async def run():
-            client = await self._new_server_client()
+            client = await self._new_openviking_client()
             try:
                 read = getattr(client, "read", None)
                 if read is None:
                     raise RuntimeError("OpenViking HTTP client has no read API")
                 return await self._maybe_await(read(uri))
             finally:
-                await self._close_server_client(client)
+                await self._close_openviking_client(client)
 
         return _run_coro_sync(run())
 
-    def _viking_rm(self, uri: str):
-        if config.OPENVIKING_BACKEND != "server":
-            return self._get_viking_client().rm(uri)
-
+    def _openviking_rm(self, uri: str):
         async def run():
-            client = await self._new_server_client()
+            client = await self._new_openviking_client()
             try:
                 rm = getattr(client, "rm", None)
                 if rm is None:
                     raise RuntimeError("OpenViking HTTP client has no rm API")
                 return await self._maybe_await(rm(uri))
             finally:
-                await self._close_server_client(client)
+                await self._close_openviking_client(client)
 
         return _run_coro_sync(run())
 
@@ -419,7 +376,7 @@ class SkillRuntime:
             if not skill_md_path.exists():
                 return f"❌ 技能 {skill_slug} 不存在，缺少 SKILL.md"
 
-            add_result = self._viking_add_skill(str(skill_md_path))
+            add_result = self._openviking_add_skill(str(skill_md_path))
             uri = add_result.get("uri", "") if isinstance(add_result, dict) else ""
             return f"✅ 技能导入成功：{skill_slug} | URI: {uri}"
         except Exception as exc:
@@ -433,7 +390,7 @@ class SkillRuntime:
             return "错误：技能名称不能为空"
 
         try:
-            self._viking_rm(f"viking://agent/skills/{skill_slug}")
+            self._openviking_rm(f"viking://agent/skills/{skill_slug}")
         except Exception:
             pass
 
@@ -447,7 +404,7 @@ class SkillRuntime:
 
     def skill_list(self) -> str:
         try:
-            skills = self._viking_ls("viking://agent/skills/")
+            skills = self._openviking_ls("viking://agent/skills/")
             if not skills:
                 return "📭 Viking 知识库中暂无任何技能"
 
@@ -466,7 +423,7 @@ class SkillRuntime:
 
     def skill_list_simple(self) -> str:
         try:
-            names = self._viking_ls("viking://agent/skills/", simple=True)
+            names = self._openviking_ls("viking://agent/skills/", simple=True)
             if not names:
                 return "📭 暂无技能"
             return "已安装技能：\n" + "\n".join(f"- {name}" for name in names)
@@ -477,7 +434,7 @@ class SkillRuntime:
         if not skill_name:
             return "读取 abstract 失败，请提供技能名"
         try:
-            return self._viking_read(f"viking://agent/skills/{skill_name}/.abstract.md") or "无简介"
+            return self._openviking_read(f"viking://agent/skills/{skill_name}/.abstract.md") or "无简介"
         except Exception:
             return f"读取 abstract 失败,请检查知识库中是否有名为{skill_name}的技能"
 
@@ -485,7 +442,7 @@ class SkillRuntime:
         if not skill_name:
             return "读取 overview 失败，请提供技能名"
         try:
-            return self._viking_read(f"viking://agent/skills/{skill_name}/.overview.md") or "无使用说明"
+            return self._openviking_read(f"viking://agent/skills/{skill_name}/.overview.md") or "无使用说明"
         except Exception:
             return f"读取 overview 失败,请检查知识库中是否有名为{skill_name}的技能"
 
@@ -493,7 +450,7 @@ class SkillRuntime:
         if not skill_name:
             return "读取 SKILL.md 失败，请提供技能名"
         try:
-            return self._viking_read(f"viking://agent/skills/{skill_name}/SKILL.md") or "无执行文档"
+            return self._openviking_read(f"viking://agent/skills/{skill_name}/SKILL.md") or "无执行文档"
         except Exception:
             return f"读取 SKILL.md 失败,请检查知识库中是否有名为{skill_name}的技能"
 
