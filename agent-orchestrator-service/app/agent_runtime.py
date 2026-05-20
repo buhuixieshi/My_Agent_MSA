@@ -175,14 +175,14 @@ class AgentRuntime:
 
         result = cls.tool_client.execute_tool(
             task_id=task.task_id,
-            tool_name="write_file",
+            tool_name="file-write",
             args=[file_path, file_content],
             user_id=task.user.id,
             session_id=task.user.session_id,
         )
 
         if result["ok"]:
-            task.tool_log.append(f"write_file {file_path}: {result['output']}")
+            task.tool_log.append(f"file-write {file_path}: {result['output']}")
             reply = f"已在你的工作空间创建文件 `{file_path}`，内容已写入。"
             cls._emit_user_message(task, emit, reply, final=True)
         else:

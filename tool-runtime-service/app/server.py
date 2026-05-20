@@ -70,25 +70,25 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
         if name == "echo":
             return kwargs.get("text") or " ".join(args)
 
-        # 工作空间文件工具
-        if name in {"list_workspace", "list_files", "workspace_list", "ls"}:
+        if name == "list-workspace":
             return list_workspace(root, config.MAX_LIST_FILES)
 
-        if name in {"read_file", "cat", "file_read"}:
+        if name == "file-read":
             rel = kwargs.get("path") or (args[0] if args else "")
             return read_text(root, rel, config.MAX_READ_BYTES)
 
-        if name in {"write_file", "file_write"}:
+        if name == "file-write":
             rel = kwargs.get("path") or (args[0] if args else "")
             text = kwargs.get("text") or (args[1] if len(args) > 1 else "")
             return write_text(root, rel, text)
 
-        if name in {"delete_file", "remove_file", "rm"}:
+        # MSA 额外保留的文件删除工具，命名仍使用短横线风格。
+        if name == "delete-file":
             rel = kwargs.get("path") or (args[0] if args else "")
             return delete_path(root, rel)
 
         # Shell 执行
-        if name in {"run_shell", "shell", "command"}:
+        if name in {"run-shell", "shell", "command"}:
             return self._run_shell(args=args, kwargs=kwargs, root=root, timeout=timeout)
 
         # Skill 相关管理工具和未知工具名都交给独立 skill_runtime。
@@ -128,6 +128,7 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
     def _help(self) -> str:
         return """tool-runtime-service tools:
 - echo: args or kwargs.text
+- shell: run system command (disabled by default)
 - list-workspace: list all files in workspace
 - file-read: kwargs.path or args[0]
 - file-write: kwargs.path + kwargs.text, or args[0] + args[1]
