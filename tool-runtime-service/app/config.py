@@ -24,9 +24,7 @@ MAX_READ_BYTES = env_int("MAX_READ_BYTES", 1024 * 1024)
 DEFAULT_TIMEOUT_SECONDS = env_int("DEFAULT_TIMEOUT_SECONDS", 30)
 
 SKILL_ROOT_DIR = os.getenv("SKILL_ROOT_DIR", os.path.join(WORKSPACE_DIR, "skill"))
-SKILL_VIKING_DATA_DIR = os.getenv("SKILL_VIKING_DATA_DIR", os.path.join(SKILL_ROOT_DIR, "viking_data"))
 
-OPENVIKING_BACKEND = os.getenv("OPENVIKING_BACKEND", "server").lower()
 OPENVIKING_SERVER_URL = os.getenv("OPENVIKING_SERVER_URL", "http://openviking.agent.svc.cluster.local:1933")
 OPENVIKING_API_KEY = os.getenv("OPENVIKING_API_KEY", "")
 OPENVIKING_ACCOUNT = os.getenv("OPENVIKING_ACCOUNT", "my-agent")
