@@ -1,3 +1,4 @@
 grpcio==1.68.1
 grpcio-tools==1.68.1
 protobuf==5.29.1
+openviking==0.3.6

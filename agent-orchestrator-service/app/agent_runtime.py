@@ -175,14 +175,14 @@ class AgentRuntime:
 
         result = cls.tool_client.execute_tool(
             task_id=task.task_id,
-            tool_name="write_file",
+            tool_name="file-write",
             args=[file_path, file_content],
             user_id=task.user.id,
             session_id=task.user.session_id,
         )
 
         if result["ok"]:
-            task.tool_log.append(f"write_file {file_path}: {result['output']}")
+            task.tool_log.append(f"file-write {file_path}: {result['output']}")
             reply = f"已在你的工作空间创建文件 `{file_path}`，内容已写入。"
             cls._emit_user_message(task, emit, reply, final=True)
         else:
@@ -513,16 +513,13 @@ class AgentRuntime:
                 self.call_agent(target_agent_id, task, emit)
 
             elif result["question"]:
-                task.status = "pause"
-                question = result["question"]
-                task.push_context(self, f"{content}<{self.id}>{question}")
-                task.set_temp_dialog_input(f"[询问]{self.id}:{question}")
-                emit(self.build_event(
-                    task,
-                    "assistant_intermediate",
-                    text=question,
-                    metadata={"visible_to_user": "true", "final": "false"},
-                ))
+                question = (result["question"] or "").strip() or "请补充必要信息后我再继续。"
+                # 微服务版每个 ExecuteTask 都是独立请求，TaskRuntime 的 agent_context
+                # 不会跨请求持久化；不能再把本轮任务置为 pause 后等待恢复。
+                # 这里把 `询问:xxx` 作为本轮最终回复发给用户，下一轮用户回答会通过
+                # context-service 带上这轮问题继续处理。
+                self._emit_user_message(task, emit, question, final=True)
+                return
 
             elif result["timer_task"]:
                 # 定时任务后续可拆到 timer-task-service。
