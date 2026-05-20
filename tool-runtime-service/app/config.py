@@ -28,6 +28,8 @@ SKILL_ROOT_DIR = os.getenv("SKILL_ROOT_DIR", os.path.join(WORKSPACE_DIR, "skill"
 OPENVIKING_SERVER_URL = os.getenv("OPENVIKING_SERVER_URL", "http://openviking.agent.svc.cluster.local:1933")
 OPENVIKING_API_KEY = os.getenv("OPENVIKING_API_KEY", "")
 OPENVIKING_ACCOUNT = os.getenv("OPENVIKING_ACCOUNT", "my-agent")
+OPENVIKING_USER = os.getenv("OPENVIKING_USER", "tool-runtime")
+OPENVIKING_AGENT = os.getenv("OPENVIKING_AGENT", "tool-runtime")
 
 CLAW_DOWNLOAD_MODE = os.getenv("CLAW_DOWNLOAD_MODE", "external-vm").lower()
 CLAW_EXTERNAL_VM_HOST = os.getenv("CLAW_EXTERNAL_VM_HOST", "")
