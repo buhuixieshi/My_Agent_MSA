@@ -94,6 +94,7 @@ def parse_syntax(agent, task):
     tool_call = None
     question = None
     timer_task = None
+    switch_call = None
 
     # 保持和原项目接近的优先级：先解析智能体调用。
     agent_line = _find_command_block(full_text, "对话", allow_multiline=True)
@@ -125,13 +126,16 @@ def parse_syntax(agent, task):
             }
 
     switch_target = None
+    pure_switch = False
 
-    # 切换智能体：更新默认智能体；如果模型只输出切换指令，则把本轮原始请求立即转交给目标智能体。
+    # 切换智能体：更新默认智能体；若本轮只输出切换指令，则转成一次真实的 agent_call。
     switch_line = _find_command_block(full_text, "切换", allow_multiline=False)
     if switch_line:
         agent_id = switch_line.strip()
         if agent_id:
             switch_target = agent_id
+            pure_switch = full_text == f"切换:{agent_id}"
+            switch_call = {"target_id": agent_id, "pure": pure_switch}
             agent.set_default_agent(agent_id)
 
     for line in full_text.splitlines():
@@ -140,20 +144,25 @@ def parse_syntax(agent, task):
             agent_id = match_switch2.group(1).strip()
             if agent_id:
                 switch_target = agent_id
+                pure_switch = full_text == f"切换到{agent_id}智能体"
+                switch_call = {"target_id": agent_id, "pure": pure_switch}
                 agent.set_default_agent(agent_id)
             break
 
     if (
         switch_target
+        and pure_switch
         and not agent_call
         and not tool_call
         and switch_target != getattr(agent, "id", "")
-        and full_text in {f"切换:{switch_target}", f"切换到{switch_target}智能体"}
     ):
         agent_call = {
             "target_id": switch_target,
             "content": getattr(task, "content", "") or full_text,
+            "from_switch": True,
         }
+        # 纯切换是控制协议，不应作为最终用户可见回复或历史 assistant 文本。
+        reply = ""
 
     # 定时任务在询问之前判断，避免同时出现时被询问分支抢走。
     timer_line = _find_command_block(full_text, "定时任务", allow_multiline=False)
@@ -188,4 +197,5 @@ def parse_syntax(agent, task):
         "agent_call": agent_call,
         "question": question,
         "timer_task": timer_task,
+        "switch_call": switch_call,
     })
