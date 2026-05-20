@@ -59,6 +59,7 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
             )
 
     def _dispatch(self, tool_name: str, args: list[str], kwargs: dict[str, str], root: Path, timeout: int) -> str:
+        # 外部传入 - 自动转内部 _
         name = tool_name.lower().replace("-", "_")
 
         if name in {"", "help"}:
@@ -67,14 +68,15 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
         if name == "echo":
             return kwargs.get("text") or " ".join(args)
 
+        # 工作空间文件工具
         if name in {"list_workspace", "list_files", "workspace_list", "ls"}:
             return list_workspace(root, config.MAX_LIST_FILES)
 
-        if name in {"read_file", "cat"}:
+        if name in {"read_file", "cat", "file_read"}:
             rel = kwargs.get("path") or (args[0] if args else "")
             return read_text(root, rel, config.MAX_READ_BYTES)
 
-        if name == "write_file":
+        if name in {"write_file", "file_write"}:
             rel = kwargs.get("path") or (args[0] if args else "")
             text = kwargs.get("text") or (args[1] if len(args) > 1 else "")
             return write_text(root, rel, text)
@@ -83,17 +85,19 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
             rel = kwargs.get("path") or (args[0] if args else "")
             return delete_path(root, rel)
 
+        # Shell 执行
         if name in {"run_shell", "shell", "command"}:
             return self._run_shell(args=args, kwargs=kwargs, root=root, timeout=timeout)
 
+        # 匹配你的规范工具名
         raise ValueError(
-            f"unknown tool_name={tool_name!r}; supported: help, echo, list_workspace, read_file, write_file, delete_file"
-            + (", run_shell" if config.ENABLE_SHELL_TOOLS else "")
+            f"unknown tool_name={tool_name!r}; supported: help, echo, list-workspace, file-read, file-write, delete-file"
+            + (", shell" if config.ENABLE_SHELL_TOOLS else "")
         )
 
     def _run_shell(self, args: list[str], kwargs: dict[str, str], root: Path, timeout: int) -> str:
         if not config.ENABLE_SHELL_TOOLS:
-            raise PermissionError("run_shell is disabled. Set ENABLE_SHELL_TOOLS=true to enable it.")
+            raise PermissionError("shell is disabled. Set ENABLE_SHELL_TOOLS=true to enable it.")
 
         command = kwargs.get("command") or " ".join(args)
         if not command:
@@ -118,11 +122,11 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
     def _help(self) -> str:
         return """tool-runtime-service tools:
 - echo: args or kwargs.text
-- list_workspace / list_files / ls
-- read_file: kwargs.path or args[0]
-- write_file: kwargs.path + kwargs.text, or args[0] + args[1]
-- delete_file: kwargs.path or args[0], file or empty directory only
-- run_shell: disabled by default; set ENABLE_SHELL_TOOLS=true
+- list-workspace: list all files in workspace
+- file-read: kwargs.path or args[0]
+- file-write: kwargs.path + kwargs.text, or args[0] + args[1]
+- delete-file: kwargs.path or args[0], file or empty directory only
+- shell: run system command (disabled by default)
 """
 
 
@@ -139,3 +143,7 @@ def serve():
     log(f"shell tools enabled: {config.ENABLE_SHELL_TOOLS}")
 
     server.wait_for_termination()
+
+
+if __name__ == "__main__":
+    serve()
