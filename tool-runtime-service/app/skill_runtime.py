@@ -492,7 +492,7 @@ class SkillRuntime:
         script_file = skill_dir / "scripts" / f"{skill_name}.py"
 
         if not script_file.exists():
-            return self.skill_overview(skill_name)
+            return "本技能无法通过该方式调用，请阅读下面文档学习该任务的执行流程\n"+self.skill_overview(skill_name)
 
         command = [sys.executable, str(script_file), *[str(arg) for arg in args]]
         proc = subprocess.run(
