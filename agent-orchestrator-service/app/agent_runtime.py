@@ -407,7 +407,18 @@ class AgentRuntime:
             parse_syntax(self, task)
             result = task.consume_temp_dialog_output()
 
-            chat_log(f"{self.id} 回复:\n {result['final_reply']}")
+            if result.get("switch_call") and result["agent_call"]:
+                debug_log(
+                    f"[switch_route] {self.id} -> {result['agent_call']['target_id']} "
+                    f"content={result['agent_call']['content']}"
+                )
+                chat_log(
+                    f"{self.id} 切换并转交:\n "
+                    f"{result['agent_call']['target_id']}|{result['agent_call']['content']}"
+                )
+            else:
+                chat_log(f"{self.id} 回复:\n {result['final_reply']}")
+
             task.set_temp_dialog_output(result["final_reply"])
             task.caller = self
 
