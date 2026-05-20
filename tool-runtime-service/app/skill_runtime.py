@@ -1,14 +1,39 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import os
 import shlex
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Any
 
 from app import config
+
+
+def _run_coro_sync(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    box = {"result": None, "error": None}
+
+    def runner():
+        try:
+            box["result"] = asyncio.run(coro)
+        except Exception as exc:
+            box["error"] = exc
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+    if box["error"] is not None:
+        raise box["error"]
+    return box["result"]
 
 
 class SkillRuntime:
@@ -16,7 +41,7 @@ class SkillRuntime:
     OpenClaw / ClawHub skill runtime for My_Agent_MSA.
 
     - ClawHub commands run on an external VM or WSL by default.
-    - OpenViking still runs inside the tool-runtime-service container.
+    - Skill indexing/querying uses the OpenViking service by default.
     - Skills are shared by all users under SKILL_ROOT_DIR.
     """
 
@@ -28,6 +53,111 @@ class SkillRuntime:
     def _ensure_dirs(self) -> None:
         self.skill_root.mkdir(parents=True, exist_ok=True)
         self.viking_data_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _maybe_await(self, value):
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    def _client_kwargs(self, client_cls) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        try:
+            params = inspect.signature(client_cls).parameters
+        except Exception:
+            params = {}
+
+        url = config.OPENVIKING_SERVER_URL
+        if "url" in params:
+            kwargs["url"] = url
+        elif "base_url" in params:
+            kwargs["base_url"] = url
+        elif "endpoint" in params:
+            kwargs["endpoint"] = url
+
+        if config.OPENVIKING_API_KEY:
+            for key_name in ("api_key", "root_api_key", "token", "auth_token"):
+                if key_name in params:
+                    kwargs[key_name] = config.OPENVIKING_API_KEY
+                    break
+
+        if config.OPENVIKING_ACCOUNT:
+            if "account" in params:
+                kwargs["account"] = config.OPENVIKING_ACCOUNT
+            elif "account_id" in params:
+                kwargs["account_id"] = config.OPENVIKING_ACCOUNT
+
+        return kwargs
+
+    def _apply_openviking_headers(self, client) -> None:
+        for attr, value in (
+            ("api_key", config.OPENVIKING_API_KEY),
+            ("root_api_key", config.OPENVIKING_API_KEY),
+            ("account", config.OPENVIKING_ACCOUNT),
+            ("account_id", config.OPENVIKING_ACCOUNT),
+        ):
+            if value and hasattr(client, attr):
+                try:
+                    setattr(client, attr, value)
+                except Exception:
+                    pass
+
+        extra_headers = {}
+        if config.OPENVIKING_API_KEY:
+            extra_headers["X-API-Key"] = config.OPENVIKING_API_KEY
+            extra_headers["Authorization"] = f"Bearer {config.OPENVIKING_API_KEY}"
+            extra_headers["X-OpenViking-API-Key"] = config.OPENVIKING_API_KEY
+        if config.OPENVIKING_ACCOUNT:
+            extra_headers["X-OpenViking-Account"] = config.OPENVIKING_ACCOUNT
+
+        for holder in (
+            client,
+            getattr(client, "_http", None),
+            getattr(client, "client", None),
+            getattr(client, "_client", None),
+            getattr(client, "http_client", None),
+            getattr(client, "_http_client", None),
+        ):
+            headers = getattr(holder, "headers", None) if holder is not None else None
+            if headers is None:
+                continue
+            try:
+                for key, value in extra_headers.items():
+                    headers.setdefault(key, value)
+            except Exception:
+                pass
+
+    async def _new_server_client(self):
+        if not config.OPENVIKING_SERVER_URL:
+            raise RuntimeError("OPENVIKING_SERVER_URL is empty")
+
+        import openviking as ov
+
+        client_cls = getattr(ov, "AsyncHTTPClient", None)
+        if client_cls is None:
+            raise RuntimeError("openviking.AsyncHTTPClient is not available")
+
+        try:
+            client = client_cls(**self._client_kwargs(client_cls))
+        except TypeError:
+            client = client_cls(config.OPENVIKING_SERVER_URL)
+
+        self._apply_openviking_headers(client)
+        initialize = getattr(client, "initialize", None)
+        if initialize is not None:
+            await self._maybe_await(initialize())
+        self._apply_openviking_headers(client)
+        return client
+
+    async def _close_server_client(self, client) -> None:
+        for name in ("aclose", "close"):
+            method = getattr(client, name, None)
+            if method is None:
+                continue
+            try:
+                await self._maybe_await(method())
+                return
+            except Exception:
+                return
 
     def _get_viking_client(self):
         self._ensure_dirs()
@@ -42,6 +172,12 @@ class SkillRuntime:
                 "Add openviking to requirements.txt and rebuild the image."
             ) from exc
 
+        if config.OPENVIKING_BACKEND == "server":
+            # Keep a lightweight marker. Server clients are opened per operation
+            # because AsyncHTTPClient owns async resources.
+            self._client = "server"
+            return self._client
+
         if hasattr(ov, "SyncOpenViking"):
             client = ov.SyncOpenViking(path=str(self.viking_data_dir))
         else:
@@ -50,6 +186,76 @@ class SkillRuntime:
         client.initialize()
         self._client = client
         return client
+
+    def _viking_add_skill(self, skill_md_path: str):
+        if config.OPENVIKING_BACKEND != "server":
+            return self._get_viking_client().add_skill(skill_md_path, wait=True)
+
+        async def run():
+            client = await self._new_server_client()
+            try:
+                add_skill = getattr(client, "add_skill", None)
+                if add_skill is None:
+                    raise RuntimeError("OpenViking HTTP client has no add_skill API")
+                try:
+                    return await self._maybe_await(add_skill(skill_md_path, wait=True))
+                except TypeError:
+                    return await self._maybe_await(add_skill(skill_md_path))
+            finally:
+                await self._close_server_client(client)
+
+        return _run_coro_sync(run())
+
+    def _viking_ls(self, uri: str, simple: bool = False):
+        if config.OPENVIKING_BACKEND != "server":
+            return self._get_viking_client().ls(uri, simple=simple) if simple else self._get_viking_client().ls(uri)
+
+        async def run():
+            client = await self._new_server_client()
+            try:
+                ls = getattr(client, "ls", None)
+                if ls is None:
+                    raise RuntimeError("OpenViking HTTP client has no ls API")
+                try:
+                    return await self._maybe_await(ls(uri, simple=simple))
+                except TypeError:
+                    return await self._maybe_await(ls(uri))
+            finally:
+                await self._close_server_client(client)
+
+        return _run_coro_sync(run())
+
+    def _viking_read(self, uri: str):
+        if config.OPENVIKING_BACKEND != "server":
+            return self._get_viking_client().read(uri)
+
+        async def run():
+            client = await self._new_server_client()
+            try:
+                read = getattr(client, "read", None)
+                if read is None:
+                    raise RuntimeError("OpenViking HTTP client has no read API")
+                return await self._maybe_await(read(uri))
+            finally:
+                await self._close_server_client(client)
+
+        return _run_coro_sync(run())
+
+    def _viking_rm(self, uri: str):
+        if config.OPENVIKING_BACKEND != "server":
+            return self._get_viking_client().rm(uri)
+
+        async def run():
+            client = await self._new_server_client()
+            try:
+                rm = getattr(client, "rm", None)
+                if rm is None:
+                    raise RuntimeError("OpenViking HTTP client has no rm API")
+                return await self._maybe_await(rm(uri))
+            finally:
+                await self._close_server_client(client)
+
+        return _run_coro_sync(run())
 
     @staticmethod
     def _format_completed_process(proc: subprocess.CompletedProcess) -> str:
@@ -213,8 +419,7 @@ class SkillRuntime:
             if not skill_md_path.exists():
                 return f"❌ 技能 {skill_slug} 不存在，缺少 SKILL.md"
 
-            client = self._get_viking_client()
-            add_result = client.add_skill(str(skill_md_path), wait=True)
+            add_result = self._viking_add_skill(str(skill_md_path))
             uri = add_result.get("uri", "") if isinstance(add_result, dict) else ""
             return f"✅ 技能导入成功：{skill_slug} | URI: {uri}"
         except Exception as exc:
@@ -228,7 +433,7 @@ class SkillRuntime:
             return "错误：技能名称不能为空"
 
         try:
-            self._get_viking_client().rm(f"viking://agent/skills/{skill_slug}")
+            self._viking_rm(f"viking://agent/skills/{skill_slug}")
         except Exception:
             pass
 
@@ -242,7 +447,7 @@ class SkillRuntime:
 
     def skill_list(self) -> str:
         try:
-            skills = self._get_viking_client().ls("viking://agent/skills/")
+            skills = self._viking_ls("viking://agent/skills/")
             if not skills:
                 return "📭 Viking 知识库中暂无任何技能"
 
@@ -261,7 +466,7 @@ class SkillRuntime:
 
     def skill_list_simple(self) -> str:
         try:
-            names = self._get_viking_client().ls("viking://agent/skills/", simple=True)
+            names = self._viking_ls("viking://agent/skills/", simple=True)
             if not names:
                 return "📭 暂无技能"
             return "已安装技能：\n" + "\n".join(f"- {name}" for name in names)
@@ -272,7 +477,7 @@ class SkillRuntime:
         if not skill_name:
             return "读取 abstract 失败，请提供技能名"
         try:
-            return self._get_viking_client().read(f"viking://agent/skills/{skill_name}/.abstract.md") or "无简介"
+            return self._viking_read(f"viking://agent/skills/{skill_name}/.abstract.md") or "无简介"
         except Exception:
             return f"读取 abstract 失败,请检查知识库中是否有名为{skill_name}的技能"
 
@@ -280,7 +485,7 @@ class SkillRuntime:
         if not skill_name:
             return "读取 overview 失败，请提供技能名"
         try:
-            return self._get_viking_client().read(f"viking://agent/skills/{skill_name}/.overview.md") or "无使用说明"
+            return self._viking_read(f"viking://agent/skills/{skill_name}/.overview.md") or "无使用说明"
         except Exception:
             return f"读取 overview 失败,请检查知识库中是否有名为{skill_name}的技能"
 
@@ -288,7 +493,7 @@ class SkillRuntime:
         if not skill_name:
             return "读取 SKILL.md 失败，请提供技能名"
         try:
-            return self._get_viking_client().read(f"viking://agent/skills/{skill_name}/SKILL.md") or "无执行文档"
+            return self._viking_read(f"viking://agent/skills/{skill_name}/SKILL.md") or "无执行文档"
         except Exception:
             return f"读取 SKILL.md 失败,请检查知识库中是否有名为{skill_name}的技能"
 
