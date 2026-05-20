@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: tool-runtime-service
-          image: agent/tool-runtime-service:v2
+          image: agent/tool-runtime-service:v3
           imagePullPolicy: Never
           ports:
             - name: grpc
