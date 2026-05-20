@@ -4,6 +4,7 @@
 保留解析协议：
 - 对话:target|content
 - 工具调用:tool|arg1|arg2
+- 工具调用:shell|raw linux command
 - 询问:xxx
 - 切换:xxx
 - 切换到xxx智能体
@@ -18,6 +19,7 @@ _COMMAND_NAMES = ("对话", "工具调用", "切换", "定时任务")
 _COMMAND_LINE_RE = re.compile(
     r"^\s*(?:[-*•]\s*)?(?:" + "|".join(map(re.escape, _COMMAND_NAMES)) + r")\s*:"
 )
+_SHELL_TOOL_NAMES = {"shell", "run-shell", "command"}
 
 
 def clean_ai_thinking(text: str) -> str:
@@ -79,6 +81,48 @@ def _find_question_tail(full_text: str) -> str | None:
     return full_text[index + len(marker):].strip()
 
 
+def _parse_tool_call(tool_line: str) -> dict | None:
+    """
+    解析工具调用。
+
+    普通工具继续使用 `|` 分隔参数：
+        工具调用:file-read|a.txt
+
+    shell 类工具只按第一个 `|` 切分，后面的内容作为原始 shell command
+    完整保留，避免 `ps aux | grep python` 里的管道被协议层吞掉。
+    """
+    if not tool_line:
+        return None
+
+    first_part = tool_line.split("|", 1)[0].strip()
+    if not first_part:
+        return None
+
+    if first_part in _SHELL_TOOL_NAMES:
+        command = ""
+        if "|" in tool_line:
+            _, command = tool_line.split("|", 1)
+        command = command.strip()
+        if not command:
+            return None
+        return {
+            "tool": first_part,
+            "args": [command],
+            "kwargs": {"command": command},
+        }
+
+    parts = tool_line.split("|")
+    tool_name = parts[0].strip()
+    args = [p.strip() for p in parts[1:] if p.strip()]
+    if not tool_name:
+        return None
+    return {
+        "tool": tool_name,
+        "args": args,
+        "kwargs": {},
+    }
+
+
 def to_timestamp(time_str: str) -> float:
     dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
     return dt.timestamp()
@@ -116,14 +160,7 @@ def parse_syntax(agent, task):
         task.tool_log.append("调用了工具:" + tool_line)
         task.push_context(agent, memory)
 
-        parts = tool_line.split("|")
-        tool_name = parts[0].strip()
-        args = [p.strip() for p in parts[1:] if p.strip()]
-        if tool_name:
-            tool_call = {
-                "tool": tool_name,
-                "args": args,
-            }
+        tool_call = _parse_tool_call(tool_line)
 
     switch_target = None
     pure_switch = False
