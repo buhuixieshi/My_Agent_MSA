@@ -83,14 +83,36 @@ class SkillRuntime:
             elif "account_id" in params:
                 kwargs["account_id"] = config.OPENVIKING_ACCOUNT
 
+        user_id = getattr(config, "OPENVIKING_USER", "")
+        agent_id = getattr(config, "OPENVIKING_AGENT", "")
+
+        if user_id:
+            if "user_id" in params:
+                kwargs["user_id"] = user_id
+            elif "user" in params:
+                kwargs["user"] = user_id
+
+        if agent_id:
+            if "agent_id" in params:
+                kwargs["agent_id"] = agent_id
+            elif "agent" in params:
+                kwargs["agent"] = agent_id
+
         return kwargs
 
     def _apply_openviking_headers(self, client) -> None:
+        user_id = getattr(config, "OPENVIKING_USER", "")
+        agent_id = getattr(config, "OPENVIKING_AGENT", "")
+
         for attr, value in (
             ("api_key", config.OPENVIKING_API_KEY),
             ("root_api_key", config.OPENVIKING_API_KEY),
             ("account", config.OPENVIKING_ACCOUNT),
             ("account_id", config.OPENVIKING_ACCOUNT),
+            ("user_id", user_id),
+            ("user", user_id),
+            ("agent_id", agent_id),
+            ("agent", agent_id),
         ):
             if value and hasattr(client, attr):
                 try:
@@ -105,6 +127,10 @@ class SkillRuntime:
             extra_headers["X-OpenViking-API-Key"] = config.OPENVIKING_API_KEY
         if config.OPENVIKING_ACCOUNT:
             extra_headers["X-OpenViking-Account"] = config.OPENVIKING_ACCOUNT
+        if user_id:
+            extra_headers["X-OpenViking-User"] = user_id
+        if agent_id:
+            extra_headers["X-OpenViking-Agent"] = agent_id
 
         for holder in (
             client,
@@ -308,11 +334,11 @@ class SkillRuntime:
     ) -> str:
         name = (tool_name or "").strip()
 
-        if name == "clawhub-search":
-            keyword = self._first_arg(args, kwargs, "keyword", "query")
+        if name in {"clawhub-search", "search_skill", "skill-search", "search-skill"}:
+            keyword = self._first_arg(args, kwargs, "keyword", "query", "name")
             return self.clawhub_search(keyword, timeout=timeout)
 
-        if name == "clawhub-install":
+        if name in {"clawhub-install", "download_skill", "install_skill", "skill-install", "install-skill"}:
             skill_slug = self._first_arg(args, kwargs, "skill_slug", "skill", "name")
             return self.clawhub_install(skill_slug, timeout=timeout)
 
