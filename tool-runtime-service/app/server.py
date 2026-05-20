@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from concurrent import futures
@@ -109,6 +110,15 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
         if not command:
             raise ValueError("missing command")
 
+        # Shell 的相对路径必须以用户 workspace 为起点。
+        # 注意：这不是完整沙箱；绝对路径仍可能访问容器内其它位置。
+        # 真正生产环境还需要配合非 root、只读 rootfs、网络/权限隔离。
+        env = {
+            **os.environ,
+            "MY_AGENT_WORKSPACE": str(root),
+            "PWD": str(root),
+        }
+
         proc = subprocess.run(
             command,
             shell=True,
@@ -117,6 +127,7 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
+            env=env,
         )
 
         output = proc.stdout

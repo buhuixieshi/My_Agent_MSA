@@ -338,11 +338,11 @@ class SkillRuntime:
     ) -> str:
         name = (tool_name or "").strip()
 
-        if name == "clawhub-search":
-            keyword = self._first_arg(args, kwargs, "keyword", "query")
+        if name in {"clawhub-search", "search_skill", "skill-search", "search-skill"}:
+            keyword = self._first_arg(args, kwargs, "keyword", "query", "name")
             return self.clawhub_search(keyword, timeout=timeout)
 
-        if name == "clawhub-install":
+        if name in {"clawhub-install", "download_skill", "install_skill", "skill-install", "install-skill"}:
             skill_slug = self._first_arg(args, kwargs, "skill_slug", "skill", "name")
             return self.clawhub_install(skill_slug, timeout=timeout)
 
