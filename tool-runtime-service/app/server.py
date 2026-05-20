@@ -9,6 +9,7 @@ import grpc
 
 from app import config
 from app.logger import log, debug
+from app.skill_runtime import skill_runtime
 from app.workspace import delete_path, list_workspace, read_text, workspace_root, write_text
 
 GENERATED_DIR = Path(__file__).parent / "generated"
@@ -59,8 +60,9 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
             )
 
     def _dispatch(self, tool_name: str, args: list[str], kwargs: dict[str, str], root: Path, timeout: int) -> str:
-        # 外部传入 - 自动转内部 _
-        name = tool_name.lower().replace("-", "_")
+        # 与原项目 core/Agent/Tool_manager.py 保持一致：
+        # 工具名使用 OpenClaw/ClawHub 风格的短横线命名，并按原名精确分发。
+        name = (tool_name or "").strip()
 
         if name in {"", "help"}:
             return self._help()
@@ -89,10 +91,14 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
         if name in {"run_shell", "shell", "command"}:
             return self._run_shell(args=args, kwargs=kwargs, root=root, timeout=timeout)
 
-        # 匹配你的规范工具名
-        raise ValueError(
-            f"unknown tool_name={tool_name!r}; supported: help, echo, list-workspace, file-read, file-write, delete-file"
-            + (", shell" if config.ENABLE_SHELL_TOOLS else "")
+        # Skill 相关管理工具和未知工具名都交给独立 skill_runtime。
+        # 这对应原项目 ToolManager 的行为：原生工具未命中时，自动尝试按 skill 名执行。
+        return skill_runtime.dispatch(
+            tool_name=name,
+            args=args,
+            kwargs=kwargs,
+            user_workspace=root,
+            timeout=timeout,
         )
 
     def _run_shell(self, args: list[str], kwargs: dict[str, str], root: Path, timeout: int) -> str:
@@ -126,7 +132,16 @@ class ToolRuntimeService(tool_runtime_pb2_grpc.ToolRuntimeServicer):
 - file-read: kwargs.path or args[0]
 - file-write: kwargs.path + kwargs.text, or args[0] + args[1]
 - delete-file: kwargs.path or args[0], file or empty directory only
-- shell: run system command (disabled by default)
+
+skill tools:
+- clawhub-search: keyword
+- clawhub-install: skill_slug; installs into shared /app/workspace/skill and imports to OpenViking
+- clawhub-list
+- skill-list / skill-list-simple
+- skill-delete: skill_slug
+- skill-abstract / skill-overview / skill-manual: skill_name
+- add-skill-to-viking: skill_slug
+- any other tool name: treated as installed skill name
 """
 
 
@@ -140,6 +155,8 @@ def serve():
 
     log(f"tool-runtime-service started on {listen_addr}")
     log(f"workspace dir: {config.WORKSPACE_DIR}")
+    log(f"skill root dir: {config.SKILL_ROOT_DIR}")
+    log(f"skill viking data dir: {config.SKILL_VIKING_DATA_DIR}")
     log(f"shell tools enabled: {config.ENABLE_SHELL_TOOLS}")
 
     server.wait_for_termination()
